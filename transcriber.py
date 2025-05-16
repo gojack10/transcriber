@@ -9,6 +9,7 @@ import re
 BASE_DIR = Path(__file__).resolve().parent
 UNCONVERTED_DIR = BASE_DIR / "unconverted"
 CONVERTED_DIR = BASE_DIR / "converted"
+DOWNLOAD_ARCHIVE = BASE_DIR / "downloaded_archive.txt"
 
 # Supported audio file extensions (add more if needed)
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".wma"}
@@ -112,6 +113,36 @@ def download_youtube_videos(list_file_path, output_dir):
 
         print(f"\nDownloading video {i + 1} of {len(links)}: {cleaned_link}")
 
+        # Determine the expected filename of the output WAV file
+        filename_command = [
+            "yt-dlp",
+            "-x", # Extract audio
+            "--audio-format", "wav", # Specify WAV format
+            "--restrict-filenames",
+            "--print", "%(title)s.%(ext)s",
+            cleaned_link
+        ]
+        try:
+            filename_process = subprocess.Popen(filename_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            filename_stdout, filename_stderr = filename_process.communicate()
+            expected_filename = filename_stdout.decode('utf-8').strip()
+
+            if filename_process.returncode != 0:
+                 print(f"  Error determining expected filename for {cleaned_link}: {filename_stderr.decode('utf-8').strip()}")
+                 failed_downloads.append(cleaned_link)
+                 continue # Skip to the next link if filename cannot be determined
+
+        except FileNotFoundError:
+            print("Error: yt-dlp command not found.")
+            print("Please ensure yt-dlp is installed and in your system's PATH.")
+            print("You can install it from https://github.com/yt-dlp/yt-dlp")
+            failed_downloads.extend(links[i:]) # Mark remaining links as failed
+            break # Stop processing if yt-dlp is not found
+        except Exception as e:
+            print(f"  An unexpected error occurred while determining expected filename for {cleaned_link}: {e}")
+            failed_downloads.append(cleaned_link)
+            continue # Skip to the next link on unexpected error
+
         # yt-dlp command to download as WAV
         # -x: extract audio
         # --audio-format wav: specify wav format
@@ -123,6 +154,7 @@ def download_youtube_videos(list_file_path, output_dir):
             "--audio-format", "wav",
             "--restrict-filenames",
             "-o", str(output_dir / "%(title)s.%(ext)s"),
+            "--download-archive", str(BASE_DIR / "downloaded_archive.txt"),
             cleaned_link
         ]
 
@@ -130,6 +162,10 @@ def download_youtube_videos(list_file_path, output_dir):
             # Execute the command
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             stdout, stderr = process.communicate()
+
+            # Print stdout and stderr for debugging
+            print(f"  yt-dlp stdout:\n{stdout.decode('utf-8').strip()}")
+            print(f"  yt-dlp stderr:\n{stderr.decode('utf-8').strip()}")
 
             if process.returncode == 0:
                 print(f"  Successfully downloaded.")
@@ -198,6 +234,10 @@ def main():
         sys.exit(1)
 
     CONVERTED_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not DOWNLOAD_ARCHIVE.exists():
+        print(f"Creating download archive file '{DOWNLOAD_ARCHIVE}'...")
+        DOWNLOAD_ARCHIVE.touch()
 
     chosen_model = "turbo"
     print(f"Using default model: {chosen_model}")
