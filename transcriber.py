@@ -2,6 +2,8 @@ import os
 import whisper
 from pathlib import Path
 import sys
+import subprocess
+import re
 
 # --- Configuration ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -51,8 +53,13 @@ def transcribe_files(model_name):
 
     print(f"\nFound {len(audio_files)} audio file(s) to transcribe.")
 
+    # Add counters for transcription progress
+    total_files = len(audio_files)
+    transcribed_count = 0
+
     for audio_file_path in audio_files:
-        print(f"\nProcessing '{audio_file_path.name}'...")
+        transcribed_count += 1 # Increment counter for each file processed (even if skipped)
+        print(f"\nProcessing '{audio_file_path.name}' ({transcribed_count}/{total_files})...")
         output_txt_filename = audio_file_path.stem + ".txt"
         output_txt_path = CONVERTED_DIR / output_txt_filename
 
@@ -75,6 +82,82 @@ def transcribe_files(model_name):
             failed_files.append(audio_file_path.name)
 
     return processed_originals, failed_files
+
+def download_youtube_videos(list_file_path, output_dir):
+    """
+    Reads YouTube links from a file, cleans them, and downloads them as WAV files
+    to the specified output directory using yt-dlp.
+    """
+    if not list_file_path.exists():
+        print(f"Error: List file '{list_file_path}' not found.")
+        return []
+
+    downloaded_files = []
+    failed_downloads = []
+
+    with open(list_file_path, 'r', encoding='utf-8') as f:
+        links = [line.strip() for line in f if line.strip()] # Read non-empty lines
+
+    if not links:
+        print(f"No links found in '{list_file_path}'.")
+        return []
+
+    print(f"\nFound {len(links)} link(s) in '{list_file_path}'.")
+    print("Starting YouTube video downloads...")
+
+    output_dir.mkdir(parents=True, exist_ok=True) # Ensure output directory exists
+
+    for i, link in enumerate(links):
+        cleaned_link = re.sub(r'&list=.*', '', link) # Remove playlist parameter
+
+        print(f"\nDownloading video {i + 1} of {len(links)}: {cleaned_link}")
+
+        # yt-dlp command to download as WAV
+        # -x: extract audio
+        # --audio-format wav: specify wav format
+        # -o: output file template. %(title)s is the video title, .%(ext)s is the extension
+        # --restrict-filenames: keep filenames simple
+        command = [
+            "yt-dlp",
+            "-x",
+            "--audio-format", "wav",
+            "--restrict-filenames",
+            "-o", str(output_dir / "%(title)s.%(ext)s"),
+            cleaned_link
+        ]
+
+        try:
+            # Execute the command
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, stderr = process.communicate()
+
+            if process.returncode == 0:
+                print(f"  Successfully downloaded.")
+                # Note: We don't have the exact downloaded filename here easily,
+                # but the transcribe function will find it in the directory.
+                downloaded_files.append(cleaned_link) # Store the link for tracking
+            else:
+                print(f"  Error downloading: {stderr.decode('utf-8').strip()}")
+                failed_downloads.append(cleaned_link)
+
+        except FileNotFoundError:
+            print("Error: yt-dlp command not found.")
+            print("Please ensure yt-dlp is installed and in your system's PATH.")
+            print("You can install it from https://github.com/yt-dlp/yt-dlp")
+            failed_downloads.extend(links[i:]) # Mark remaining links as failed
+            break # Stop processing if yt-dlp is not found
+        except Exception as e:
+            print(f"  An unexpected error occurred during download: {e}")
+            failed_downloads.append(cleaned_link)
+
+    if failed_downloads:
+        print("\n--- Download Summary ---")
+        print(f"Failed to download {len(failed_downloads)} link(s):")
+        for link in failed_downloads:
+            print(f"  - {link}")
+
+    return downloaded_files
+
 
 def prompt_for_deletion(file_paths):
     """Asks the user if they want to delete the specified files."""
@@ -119,7 +202,24 @@ def main():
     chosen_model = "turbo"
     print(f"Using default model: {chosen_model}")
 
-    successfully_processed_originals, failed_files = transcribe_files(chosen_model)
+    # Download videos from list.txt
+    list_file_path = BASE_DIR / "list.txt"
+    downloaded_links = download_youtube_videos(list_file_path, UNCONVERTED_DIR)
+
+    # Proceed with transcription if there are files in the unconverted directory
+    audio_files_to_transcribe = [
+        f for f in UNCONVERTED_DIR.iterdir()
+        if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
+    ]
+
+    successfully_processed_originals = []
+    failed_files = []
+
+    if audio_files_to_transcribe:
+        successfully_processed_originals, failed_files = transcribe_files(chosen_model)
+    else:
+        print("\nNo audio files found in 'unconverted' directory after download. Skipping transcription.")
+
 
     print("\n--- Transcription Summary ---")
     if successfully_processed_originals:
