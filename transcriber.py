@@ -195,36 +195,6 @@ def download_youtube_videos(list_file_path, output_dir):
     return downloaded_files
 
 
-def prompt_for_deletion(file_paths):
-    """Asks the user if they want to delete the specified files."""
-    if not file_paths:
-        return
-
-    print("\n--- Deletion Prompt ---")
-    print("The following original audio files were processed (or skipped because output existed):")
-    for f_path in file_paths:
-        print(f"  - {f_path.name}")
-
-    while True:
-        choice = input("Do you want to delete these original audio files from 'unconverted'? (y/n): ").strip().lower()
-        if choice in ["yes", "y"]:
-            print("Deleting files...")
-            deleted_count = 0
-            for f_path in file_paths:
-                try:
-                    f_path.unlink() # Deletes the file
-                    print(f"  Deleted '{f_path.name}'")
-                    deleted_count += 1
-                except Exception as e:
-                    print(f"  Error deleting '{f_path.name}': {e}")
-            print(f"{deleted_count} file(s) deleted.")
-            break
-        elif choice in ["no", "n"]:
-            print("Original files will not be deleted.")
-            break
-        else:
-            print("Invalid choice. Please enter 'y' or 'n'.")
-
 def main():
     print("--- Audio Transcription Script ---")
 
@@ -276,9 +246,20 @@ def main():
 
 
     if successfully_processed_originals:
-        prompt_for_deletion(successfully_processed_originals)
+        print("\n--- Automatic Deletion ---")
+        print("Automatically deleting the following original audio files from 'unconverted':")
+        deleted_count = 0
+        for f_path in successfully_processed_originals:
+            print(f"  - {f_path.name}")
+            try:
+                f_path.unlink() # Deletes the file
+                print(f"  Deleted '{f_path.name}'")
+                deleted_count += 1
+            except Exception as e:
+                print(f"  Error deleting '{f_path.name}': {e}")
+        print(f"{deleted_count} file(s) deleted.")
     elif not failed_files: # Only show this if no files were processed and no errors occurred earlier
-        print("\nNo files were processed, so no deletion prompt needed.")
+        print("\nNo files were processed, so no deletion needed.")
 
 
     print("\n--- Script Finished ---")
