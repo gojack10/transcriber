@@ -44,7 +44,8 @@ def initialize_db():
                 url TEXT UNIQUE,
                 status TEXT NOT NULL,
                 download_date TEXT NOT NULL,
-                local_path TEXT
+                local_path TEXT,
+                yt_dlp_processed BOOLEAN DEFAULT FALSE
             )
         ''')
         cursor.execute('''
@@ -52,12 +53,28 @@ def initialize_db():
                 id SERIAL PRIMARY KEY,
                 utc_time TEXT NOT NULL,
                 pst_time TEXT NOT NULL,
+                url TEXT UNIQUE,
                 video_title TEXT NOT NULL,
-                content TEXT NOT NULL
+                content TEXT NOT NULL,
+                FOREIGN KEY (url) REFERENCES downloaded_videos(url)
             )
         ''')
+        # Attempt to add the yt_dlp_processed column if it doesn't exist, for existing tables
+        cursor.execute('''
+            ALTER TABLE downloaded_videos
+            ADD COLUMN IF NOT EXISTS yt_dlp_processed BOOLEAN DEFAULT FALSE;
+        ''')
+        cursor.execute('''
+            ALTER TABLE transcribed
+            ADD COLUMN IF NOT EXISTS url TEXT UNIQUE;
+        ''')
+        cursor.execute('''
+            ALTER TABLE transcribed
+            ADD CONSTRAINT fk_downloaded_videos
+            FOREIGN KEY (url) REFERENCES downloaded_videos(url);
+        ''')
         conn.commit()
-        print("PostgreSQL database initialized and tables ensured.")
+        print("PostgreSQL database initialized and tables (and columns) ensured.")
     except psycopg2.Error as e:
         print(f"Error initializing PostgreSQL database: {e}")
         conn.rollback()
@@ -65,27 +82,27 @@ def initialize_db():
         cursor.close()
         conn.close()
 
-def get_download_status(url: str) -> tuple[str | None, str | None]:
+def get_download_status(url: str) -> tuple[str | None, str | None, bool | None]:
     """
-    Checks the download status and local path of a URL in the database.
-    Returns (status, local_path) or (None, None) if not found.
+    Checks the download status, local path, and yt_dlp_processed flag of a URL in the database.
+    Returns (status, local_path, yt_dlp_processed) or (None, None, None) if not found.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    result = (None, None)
+    result = (None, None, None)
     try:
-        cursor.execute("SELECT status, local_path FROM downloaded_videos WHERE url = %s", (url,))
+        cursor.execute("SELECT status, local_path, yt_dlp_processed FROM downloaded_videos WHERE url = %s", (url,))
         result = cursor.fetchone()
     except psycopg2.Error as e:
         print(f"Error getting download status: {e}")
     finally:
         cursor.close()
         conn.close()
-    return result if result else (None, None)
+    return result if result else (None, None, None)
 
-def update_download_status(url: str, status: str, local_path: Path | None = None):
+def update_download_status(url: str, status: str, local_path: Path | None = None, yt_dlp_processed: bool = False):
     """
-    Adds or updates a URL's status and local path in the database.
+    Adds or updates a URL's status, local path, and yt_dlp_processed flag in the database.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -94,13 +111,14 @@ def update_download_status(url: str, status: str, local_path: Path | None = None
 
     try:
         cursor.execute('''
-            INSERT INTO downloaded_videos (url, status, download_date, local_path)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO downloaded_videos (url, status, download_date, local_path, yt_dlp_processed)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (url) DO UPDATE SET
                 status = EXCLUDED.status,
                 download_date = EXCLUDED.download_date,
-                local_path = EXCLUDED.local_path
-        ''', (url, status, download_date, local_path_str))
+                local_path = EXCLUDED.local_path,
+                yt_dlp_processed = EXCLUDED.yt_dlp_processed
+        ''', (url, status, download_date, local_path_str, yt_dlp_processed))
         conn.commit()
         print(f"Database updated for '{url}' with status '{status}'.")
     except psycopg2.Error as e:
@@ -110,9 +128,9 @@ def update_download_status(url: str, status: str, local_path: Path | None = None
         cursor.close()
         conn.close()
 
-def insert_transcription_result(video_title: str, content: str):
+def insert_transcription_result(url: str, video_title: str, content: str):
     """
-    Inserts a transcription result into the transcribed table.
+    Inserts a transcription result into the transcribed table, linked to the downloaded video URL.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -132,11 +150,11 @@ def insert_transcription_result(video_title: str, content: str):
 
     try:
         cursor.execute('''
-            INSERT INTO transcribed (utc_time, pst_time, video_title, content)
-            VALUES (%s, %s, %s, %s)
-        ''', (utc_time, pst_time, video_title, content))
+            INSERT INTO transcribed (utc_time, pst_time, url, video_title, content)
+            VALUES (%s, %s, %s, %s, %s)
+        ''', (utc_time, pst_time, url, video_title, content))
         conn.commit()
-        print(f"Transcription for '{video_title}' saved to database.")
+        print(f"Transcription for '{video_title}' (URL: {url}) saved to database.")
     except psycopg2.Error as e:
         print(f"Error inserting transcription result: {e}")
         conn.rollback()
@@ -144,7 +162,7 @@ def insert_transcription_result(video_title: str, content: str):
         cursor.close()
         conn.close()
 
-def transcribe_files(model_name: str, audio_file_paths: list[Path]) -> tuple[list[Path], list[str], dict[str, str]]:
+def transcribe_files(model_name: str, downloaded_files_with_urls: list[tuple[Path, str]]) -> tuple[list[Path], list[str], dict[str, str]]:
     """
     Transcribes a list of audio files using the specified Whisper model.
     Returns a tuple: (processed_originals_paths, failed_transcription_filenames, transcription_results)
@@ -153,7 +171,7 @@ def transcribe_files(model_name: str, audio_file_paths: list[Path]) -> tuple[lis
     failed_transcription_filenames = []
     transcription_results = {}
 
-    if not audio_file_paths:
+    if not downloaded_files_with_urls:
         print("No audio files provided for transcription.")
         return [], [], {}
 
@@ -169,10 +187,10 @@ def transcribe_files(model_name: str, audio_file_paths: list[Path]) -> tuple[lis
 
     print(f"\nFound {len(audio_file_paths)} audio file(s) to transcribe.")
 
-    total_files = len(audio_file_paths)
+    total_files = len(downloaded_files_with_urls)
     transcribed_count = 0
 
-    for audio_file_path in audio_file_paths:
+    for audio_file_path, url in downloaded_files_with_urls:
         transcribed_count += 1
         print(f"\nProcessing '{audio_file_path.name}' ({transcribed_count}/{total_files})...")
 
@@ -186,19 +204,19 @@ def transcribe_files(model_name: str, audio_file_paths: list[Path]) -> tuple[lis
             
             # Extract video title from audio_file_path.name (remove extension)
             video_title = audio_file_path.stem
-            insert_transcription_result(video_title, transcription)
+            insert_transcription_result(url, video_title, transcription)
         except Exception as e:
             print(f"  Error transcribing '{audio_file_path.name}': {e}")
             failed_transcription_filenames.append(audio_file_path.name)
 
     return processed_originals_paths, failed_transcription_filenames, transcription_results
 
-def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[list[Path], list[str], list[str]]:
+def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[list[tuple[Path, str]], list[str], list[str]]:
     """
     Downloads YouTube videos as WAV files to the specified output directory using yt-dlp.
-    Returns (newly_downloaded_files, skipped_for_redownload_urls, failed_download_urls).
+    Returns (list of (local_path, url) for newly_downloaded_files, skipped_for_redownload_urls, failed_download_urls).
     """
-    newly_downloaded_files = []
+    newly_downloaded_files_with_urls = []
     skipped_for_redownload_urls = []
     failed_download_urls = []
 
@@ -216,10 +234,20 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[
 
         print(f"\nProcessing URL {i + 1} of {len(youtube_urls)}: {cleaned_url}")
 
-        # Check database for existing download
-        status, local_path_db = get_download_status(cleaned_url)
+        # Check database for existing download and yt_dlp_processed status
+        status, local_path_db, yt_dlp_processed_db = get_download_status(cleaned_url)
+
+        if yt_dlp_processed_db:
+            print(f"  Skipping '{cleaned_url}', yt-dlp has already processed this URL (status: {status}).")
+            if status == 'downloaded' and local_path_db and Path(local_path_db).exists():
+                 # If it was successfully downloaded previously and file exists, add to skipped for redownload
+                skipped_for_redownload_urls.append(cleaned_url)
+            # If it failed before or file doesn't exist, it's already marked by yt_dlp_processed, so just continue
+            continue # Skip to next URL
+
         if status == 'downloaded' and local_path_db and Path(local_path_db).exists():
-            print(f"  Skipping '{cleaned_url}', already downloaded and file exists at '{local_path_db}'.")
+            print(f"  Skipping '{cleaned_url}', already downloaded and file exists at '{local_path_db}'. Marking as yt_dlp_processed.")
+            update_download_status(cleaned_url, 'downloaded', Path(local_path_db), yt_dlp_processed=True)
             skipped_for_redownload_urls.append(cleaned_url)
             continue
 
@@ -240,7 +268,7 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[
 
             if filename_process.returncode != 0:
                  print(f"  Error determining expected filename for {cleaned_url}: {filename_stderr.decode('utf-8').strip()}")
-                 update_download_status(cleaned_url, 'failed')
+                 update_download_status(cleaned_url, 'failed', yt_dlp_processed=True)
                  failed_download_urls.append(cleaned_url)
                  continue
 
@@ -250,12 +278,12 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[
             print("You can install it from https://github.com/yt-dlp/yt-dlp")
             # Mark remaining links as failed and break
             for remaining_url in youtube_urls[i:]:
-                update_download_status(remaining_url, 'failed')
+                update_download_status(remaining_url, 'failed', yt_dlp_processed=True) # Mark as processed even if yt-dlp not found for future
                 failed_download_urls.append(remaining_url)
             break
         except Exception as e:
             print(f"  An unexpected error occurred while determining expected filename for {cleaned_url}: {e}")
-            update_download_status(cleaned_url, 'failed')
+            update_download_status(cleaned_url, 'failed', yt_dlp_processed=True)
             failed_download_urls.append(cleaned_url)
             continue
 
@@ -297,16 +325,16 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[
                             break
 
                 if downloaded_file_path and downloaded_file_path.exists():
-                    newly_downloaded_files.append(downloaded_file_path)
-                    update_download_status(cleaned_url, 'downloaded', downloaded_file_path)
+                    newly_downloaded_files_with_urls.append((downloaded_file_path, cleaned_url))
+                    update_download_status(cleaned_url, 'downloaded', downloaded_file_path, yt_dlp_processed=True)
                 else:
                     print(f"  Warning: Could not determine exact downloaded file path for {cleaned_url}. Expected: {expected_filename}")
-                    update_download_status(cleaned_url, 'failed')
+                    update_download_status(cleaned_url, 'failed', yt_dlp_processed=True)
                     failed_download_urls.append(cleaned_url)
 
             else:
                 print(f"  Error downloading: {stderr.decode('utf-8').strip()}")
-                update_download_status(cleaned_url, 'failed')
+                update_download_status(cleaned_url, 'failed', yt_dlp_processed=True)
                 failed_download_urls.append(cleaned_url)
 
         except FileNotFoundError:
@@ -314,12 +342,12 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[
             print("Please ensure yt-dlp is installed and in your system's PATH.")
             print("You can install it from https://github.com/yt-dlp/yt-dlp")
             for remaining_url in youtube_urls[i:]:
-                update_download_status(remaining_url, 'failed')
+                update_download_status(remaining_url, 'failed', yt_dlp_processed=True)
                 failed_download_urls.append(remaining_url)
             break
         except Exception as e:
             print(f"  An unexpected error occurred during download: {e}")
-            update_download_status(cleaned_url, 'failed')
+            update_download_status(cleaned_url, 'failed', yt_dlp_processed=True)
             failed_download_urls.append(cleaned_url)
 
     if failed_download_urls:
@@ -328,7 +356,7 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[
         for link in failed_download_urls:
             print(f"  - {link}")
 
-    return newly_downloaded_files, skipped_for_redownload_urls, failed_download_urls
+    return newly_downloaded_files_with_urls, skipped_for_redownload_urls, failed_download_urls
 
 def cleanup_tmp_dir(tmp_dir: Path):
     """
@@ -375,12 +403,12 @@ def main():
         sys.exit(1)
 
     # Download videos
-    newly_downloaded_files, skipped_for_redownload_urls, failed_download_urls = \
+    newly_downloaded_files_with_urls, skipped_for_redownload_urls, failed_download_urls = \
         download_youtube_videos(youtube_urls, TMP_DIR)
 
     # Transcribe newly downloaded files
     processed_originals_paths, failed_transcription_filenames, transcription_results = \
-        transcribe_files(chosen_model, newly_downloaded_files)
+        transcribe_files(chosen_model, newly_downloaded_files_with_urls)
 
     print("\n--- Transcription Summary ---")
     if processed_originals_paths:
