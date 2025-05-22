@@ -8,11 +8,11 @@ import psycopg2
 from datetime import datetime
 import pytz
 from zoneinfo import ZoneInfo
+import shutil
 
 # --- Configuration ---
 BASE_DIR = Path(__file__).resolve().parent
-UNCONVERTED_DIR = BASE_DIR / "unconverted"
-CONVERTED_DIR = BASE_DIR / "converted"
+TMP_DIR = BASE_DIR / "tmp"
 
 # Supported audio file extensions (add more if needed)
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".wma"}
@@ -40,7 +40,8 @@ def initialize_db():
     try:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS downloaded_videos (
-                url TEXT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
+                url TEXT UNIQUE,
                 status TEXT NOT NULL,
                 download_date TEXT NOT NULL,
                 local_path TEXT
@@ -48,6 +49,7 @@ def initialize_db():
         ''')
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS transcribed (
+                id SERIAL PRIMARY KEY,
                 utc_time TEXT NOT NULL,
                 pst_time TEXT NOT NULL,
                 video_title TEXT NOT NULL,
@@ -142,19 +144,14 @@ def insert_transcription_result(video_title: str, content: str):
         cursor.close()
         conn.close()
 
-def transcribe_files(model_name: str, audio_file_paths: list[Path], converted_dir: Path) -> tuple[list[Path], list[str], dict[str, str]]:
+def transcribe_files(model_name: str, audio_file_paths: list[Path]) -> tuple[list[Path], list[str], dict[str, str]]:
     """
-    Transcribes a list of audio files to the specified converted directory
-    using the specified Whisper model.
+    Transcribes a list of audio files using the specified Whisper model.
     Returns a tuple: (processed_originals_paths, failed_transcription_filenames, transcription_results)
     """
     processed_originals_paths = []
     failed_transcription_filenames = []
     transcription_results = {}
-
-    if not converted_dir.exists():
-        print(f"Creating directory '{converted_dir}'...")
-        converted_dir.mkdir(parents=True, exist_ok=True)
 
     if not audio_file_paths:
         print("No audio files provided for transcription.")
@@ -178,16 +175,12 @@ def transcribe_files(model_name: str, audio_file_paths: list[Path], converted_di
     for audio_file_path in audio_file_paths:
         transcribed_count += 1
         print(f"\nProcessing '{audio_file_path.name}' ({transcribed_count}/{total_files})...")
-        output_txt_filename = audio_file_path.stem + ".txt"
-        output_txt_path = converted_dir / output_txt_filename
 
         try:
             result = model.transcribe(str(audio_file_path), fp16=False)
             transcription = result["text"]
 
-            with open(output_txt_path, "w", encoding="utf-8") as f:
-                f.write(transcription)
-            print(f"  Successfully transcribed. Output: '{output_txt_path}'")
+            print(f"  Successfully transcribed '{audio_file_path.name}'. Transcription saved to database.")
             processed_originals_paths.append(audio_file_path)
             transcription_results[audio_file_path.name] = transcription
             
@@ -200,10 +193,9 @@ def transcribe_files(model_name: str, audio_file_paths: list[Path], converted_di
 
     return processed_originals_paths, failed_transcription_filenames, transcription_results
 
-def download_youtube_videos(youtube_urls: list[str], output_dir: Path, db_path: Path) -> tuple[list[Path], list[str], list[str]]:
+def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[list[Path], list[str], list[str]]:
     """
-    Downloads YouTube videos as WAV files to the specified output directory using yt-dlp,
-    integrating with an SQLite database for tracking.
+    Downloads YouTube videos as WAV files to the specified output directory using yt-dlp.
     Returns (newly_downloaded_files, skipped_for_redownload_urls, failed_download_urls).
     """
     newly_downloaded_files = []
@@ -338,33 +330,33 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path, db_path: 
 
     return newly_downloaded_files, skipped_for_redownload_urls, failed_download_urls
 
-def delete_processed_files(file_paths: list[Path]):
+def cleanup_tmp_dir(tmp_dir: Path):
     """
-    Deletes a list of files.
+    Deletes all files and subdirectories within the specified temporary directory.
     """
-    if not file_paths:
-        print("No files to delete.")
+    if not tmp_dir.exists():
+        print(f"Temporary directory '{tmp_dir}' does not exist. No cleanup needed.")
         return
 
-    print("\n--- Automatic Deletion ---")
-    print("Automatically deleting the following original audio files:")
-    deleted_count = 0
-    for f_path in file_paths:
-        print(f"  - {f_path.name}")
+    print(f"\n--- Cleaning up temporary directory '{tmp_dir}' ---")
+    for item in tmp_dir.iterdir():
         try:
-            f_path.unlink()
-            print(f"  Deleted '{f_path.name}'")
-            deleted_count += 1
+            if item.is_file():
+                item.unlink()
+                print(f"  Deleted file: '{item.name}'")
+            elif item.is_dir():
+                import shutil
+                shutil.rmtree(item)
+                print(f"  Deleted directory: '{item.name}'")
         except Exception as e:
-            print(f"  Error deleting '{f_path.name}': {e}")
-    print(f"{deleted_count} file(s) deleted.")
+            print(f"  Error deleting '{item.name}': {e}")
+    print("Temporary directory cleanup complete.")
 
 def main():
     print("--- Audio Transcription Script ---")
 
-    # Ensure directories exist
-    UNCONVERTED_DIR.mkdir(parents=True, exist_ok=True)
-    CONVERTED_DIR.mkdir(parents=True, exist_ok=True)
+    # Ensure tmp directory exists
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
 
     # Initialize database
     initialize_db()
@@ -384,11 +376,11 @@ def main():
 
     # Download videos
     newly_downloaded_files, skipped_for_redownload_urls, failed_download_urls = \
-        download_youtube_videos(youtube_urls, UNCONVERTED_DIR)
+        download_youtube_videos(youtube_urls, TMP_DIR)
 
     # Transcribe newly downloaded files
     processed_originals_paths, failed_transcription_filenames, transcription_results = \
-        transcribe_files(chosen_model, newly_downloaded_files, CONVERTED_DIR)
+        transcribe_files(chosen_model, newly_downloaded_files)
 
     print("\n--- Transcription Summary ---")
     if processed_originals_paths:
@@ -400,8 +392,8 @@ def main():
     if not processed_originals_paths and not failed_transcription_filenames:
         print("No new files were transcribed.")
 
-    # Delete processed original audio files
-    delete_processed_files(processed_originals_paths)
+    # Clean up temporary directory
+    cleanup_tmp_dir(TMP_DIR)
 
     print("\n--- Script Finished ---")
 
