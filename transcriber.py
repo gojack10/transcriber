@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import subprocess
 import re
-import sqlite3
+import psycopg2
 from datetime import datetime
 import pytz
 from zoneinfo import ZoneInfo
@@ -13,74 +13,106 @@ from zoneinfo import ZoneInfo
 BASE_DIR = Path(__file__).resolve().parent
 UNCONVERTED_DIR = BASE_DIR / "unconverted"
 CONVERTED_DIR = BASE_DIR / "converted"
-DB_PATH = BASE_DIR / "transcription_db.sqlite"
 
 # Supported audio file extensions (add more if needed)
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".wma"}
 
-# ---------------------
-# SQLite Database Functions
-def initialize_db(db_path: Path):
-    """Initializes the SQLite database and creates the downloaded_videos table."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS downloaded_videos (
-            url TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
-            download_date TEXT NOT NULL,
-            local_path TEXT
+# PostgreSQL Database Functions
+def get_db_connection():
+    """Establishes a connection to the PostgreSQL database."""
+    try:
+        conn = psycopg2.connect(
+            host="127.0.0.1",
+            port="5432",
+            database="transcriber_db",
+            user="gojack10",
+            password="moso10"
         )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS transcribed (
-            utc_time TEXT NOT NULL,
-            pst_time TEXT NOT NULL,
-            video_title TEXT NOT NULL,
-            content TEXT NOT NULL
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    print(f"Database '{db_path}' initialized and 'downloaded_videos' table ensured.")
+        return conn
+    except psycopg2.Error as e:
+        print(f"Error connecting to PostgreSQL database: {e}")
+        sys.exit(1)
 
-def get_download_status(db_path: Path, url: str) -> tuple[str | None, str | None]:
+def initialize_db():
+    """Initializes the PostgreSQL database and creates the necessary tables."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS downloaded_videos (
+                url TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                download_date TEXT NOT NULL,
+                local_path TEXT
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transcribed (
+                utc_time TEXT NOT NULL,
+                pst_time TEXT NOT NULL,
+                video_title TEXT NOT NULL,
+                content TEXT NOT NULL
+            )
+        ''')
+        conn.commit()
+        print("PostgreSQL database initialized and tables ensured.")
+    except psycopg2.Error as e:
+        print(f"Error initializing PostgreSQL database: {e}")
+        conn.rollback()
+    finally:
+        cursor.close()
+        conn.close()
+
+def get_download_status(url: str) -> tuple[str | None, str | None]:
     """
     Checks the download status and local path of a URL in the database.
     Returns (status, local_path) or (None, None) if not found.
     """
-    conn = sqlite3.connect(db_path)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT status, local_path FROM downloaded_videos WHERE url = ?", (url,))
-    result = cursor.fetchone()
-    conn.close()
+    result = (None, None)
+    try:
+        cursor.execute("SELECT status, local_path FROM downloaded_videos WHERE url = %s", (url,))
+        result = cursor.fetchone()
+    except psycopg2.Error as e:
+        print(f"Error getting download status: {e}")
+    finally:
+        cursor.close()
+        conn.close()
     return result if result else (None, None)
 
-def update_download_status(db_path: Path, url: str, status: str, local_path: Path | None = None):
+def update_download_status(url: str, status: str, local_path: Path | None = None):
     """
     Adds or updates a URL's status and local path in the database.
     """
-    conn = sqlite3.connect(db_path)
+    conn = get_db_connection()
     cursor = conn.cursor()
     download_date = datetime.now().isoformat()
     local_path_str = str(local_path) if local_path else None
 
-    cursor.execute('''
-        INSERT OR REPLACE INTO downloaded_videos (url, status, download_date, local_path)
-        VALUES (?, ?, ?, ?)
-    ''', (url, status, download_date, local_path_str))
-    conn.commit()
-    conn.close()
-    print(f"Database updated for '{url}' with status '{status}'.")
+    try:
+        cursor.execute('''
+            INSERT INTO downloaded_videos (url, status, download_date, local_path)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (url) DO UPDATE SET
+                status = EXCLUDED.status,
+                download_date = EXCLUDED.download_date,
+                local_path = EXCLUDED.local_path
+        ''', (url, status, download_date, local_path_str))
+        conn.commit()
+        print(f"Database updated for '{url}' with status '{status}'.")
+    except psycopg2.Error as e:
+        print(f"Error updating download status: {e}")
+        conn.rollback()
+    finally:
+        cursor.close()
+        conn.close()
 
-# ---------------------
-
-def insert_transcription_result(db_path: Path, video_title: str, content: str):
+def insert_transcription_result(video_title: str, content: str):
     """
     Inserts a transcription result into the transcribed table.
     """
-    conn = sqlite3.connect(db_path)
+    conn = get_db_connection()
     cursor = conn.cursor()
     utc_time = datetime.utcnow().isoformat()
     
@@ -96,15 +128,19 @@ def insert_transcription_result(db_path: Path, video_title: str, content: str):
     # Format PST time as MM/DD/YYYY HH:MM:SS AM/PM
     pst_time = pst_time_dt.strftime('%m/%d/%Y %I:%M:%S %p')
 
-    cursor.execute('''
-        INSERT INTO transcribed (utc_time, pst_time, video_title, content)
-        VALUES (?, ?, ?, ?)
-    ''', (utc_time, pst_time, video_title, content))
-    conn.commit()
-    conn.close()
-    print(f"Transcription for '{video_title}' saved to database.")
-
-# ---------------------
+    try:
+        cursor.execute('''
+            INSERT INTO transcribed (utc_time, pst_time, video_title, content)
+            VALUES (%s, %s, %s, %s)
+        ''', (utc_time, pst_time, video_title, content))
+        conn.commit()
+        print(f"Transcription for '{video_title}' saved to database.")
+    except psycopg2.Error as e:
+        print(f"Error inserting transcription result: {e}")
+        conn.rollback()
+    finally:
+        cursor.close()
+        conn.close()
 
 def transcribe_files(model_name: str, audio_file_paths: list[Path], converted_dir: Path) -> tuple[list[Path], list[str], dict[str, str]]:
     """
@@ -157,7 +193,7 @@ def transcribe_files(model_name: str, audio_file_paths: list[Path], converted_di
             
             # Extract video title from audio_file_path.name (remove extension)
             video_title = audio_file_path.stem
-            insert_transcription_result(DB_PATH, video_title, transcription)
+            insert_transcription_result(video_title, transcription)
         except Exception as e:
             print(f"  Error transcribing '{audio_file_path.name}': {e}")
             failed_transcription_filenames.append(audio_file_path.name)
@@ -189,7 +225,7 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path, db_path: 
         print(f"\nProcessing URL {i + 1} of {len(youtube_urls)}: {cleaned_url}")
 
         # Check database for existing download
-        status, local_path_db = get_download_status(db_path, cleaned_url)
+        status, local_path_db = get_download_status(cleaned_url)
         if status == 'downloaded' and local_path_db and Path(local_path_db).exists():
             print(f"  Skipping '{cleaned_url}', already downloaded and file exists at '{local_path_db}'.")
             skipped_for_redownload_urls.append(cleaned_url)
@@ -212,7 +248,7 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path, db_path: 
 
             if filename_process.returncode != 0:
                  print(f"  Error determining expected filename for {cleaned_url}: {filename_stderr.decode('utf-8').strip()}")
-                 update_download_status(db_path, cleaned_url, 'failed')
+                 update_download_status(cleaned_url, 'failed')
                  failed_download_urls.append(cleaned_url)
                  continue
 
@@ -222,12 +258,12 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path, db_path: 
             print("You can install it from https://github.com/yt-dlp/yt-dlp")
             # Mark remaining links as failed and break
             for remaining_url in youtube_urls[i:]:
-                update_download_status(db_path, remaining_url, 'failed')
+                update_download_status(remaining_url, 'failed')
                 failed_download_urls.append(remaining_url)
             break
         except Exception as e:
             print(f"  An unexpected error occurred while determining expected filename for {cleaned_url}: {e}")
-            update_download_status(db_path, cleaned_url, 'failed')
+            update_download_status(cleaned_url, 'failed')
             failed_download_urls.append(cleaned_url)
             continue
 
@@ -270,15 +306,15 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path, db_path: 
 
                 if downloaded_file_path and downloaded_file_path.exists():
                     newly_downloaded_files.append(downloaded_file_path)
-                    update_download_status(db_path, cleaned_url, 'downloaded', downloaded_file_path)
+                    update_download_status(cleaned_url, 'downloaded', downloaded_file_path)
                 else:
                     print(f"  Warning: Could not determine exact downloaded file path for {cleaned_url}. Expected: {expected_filename}")
-                    update_download_status(db_path, cleaned_url, 'failed')
+                    update_download_status(cleaned_url, 'failed')
                     failed_download_urls.append(cleaned_url)
 
             else:
                 print(f"  Error downloading: {stderr.decode('utf-8').strip()}")
-                update_download_status(db_path, cleaned_url, 'failed')
+                update_download_status(cleaned_url, 'failed')
                 failed_download_urls.append(cleaned_url)
 
         except FileNotFoundError:
@@ -286,12 +322,12 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path, db_path: 
             print("Please ensure yt-dlp is installed and in your system's PATH.")
             print("You can install it from https://github.com/yt-dlp/yt-dlp")
             for remaining_url in youtube_urls[i:]:
-                update_download_status(db_path, remaining_url, 'failed')
+                update_download_status(remaining_url, 'failed')
                 failed_download_urls.append(remaining_url)
             break
         except Exception as e:
             print(f"  An unexpected error occurred during download: {e}")
-            update_download_status(db_path, cleaned_url, 'failed')
+            update_download_status(cleaned_url, 'failed')
             failed_download_urls.append(cleaned_url)
 
     if failed_download_urls:
@@ -331,7 +367,7 @@ def main():
     CONVERTED_DIR.mkdir(parents=True, exist_ok=True)
 
     # Initialize database
-    initialize_db(DB_PATH)
+    initialize_db()
 
     chosen_model = "turbo"
     print(f"Using default model: {chosen_model}")
@@ -348,7 +384,7 @@ def main():
 
     # Download videos
     newly_downloaded_files, skipped_for_redownload_urls, failed_download_urls = \
-        download_youtube_videos(youtube_urls, UNCONVERTED_DIR, DB_PATH)
+        download_youtube_videos(youtube_urls, UNCONVERTED_DIR)
 
     # Transcribe newly downloaded files
     processed_originals_paths, failed_transcription_filenames, transcription_results = \

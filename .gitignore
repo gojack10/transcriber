@@ -4,3 +4,4 @@ unconverted/
 converted/
 *.txt
 *.sqlite
+tmp/
