@@ -6,6 +6,8 @@ import subprocess
 import re
 import sqlite3
 from datetime import datetime
+import pytz
+from zoneinfo import ZoneInfo
 
 # --- Configuration ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -34,7 +36,7 @@ def initialize_db(db_path: Path):
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS transcribed (
             utc_time TEXT NOT NULL,
-            la_time TEXT NOT NULL,
+            pst_time TEXT NOT NULL,
             video_title TEXT NOT NULL,
             content TEXT NOT NULL
         )
@@ -81,12 +83,23 @@ def insert_transcription_result(db_path: Path, video_title: str, content: str):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     utc_time = datetime.utcnow().isoformat()
-    la_time = datetime.now().isoformat() # Assuming local time is LA time for simplicity
+    
+    # Get current UTC time
+    now_utc = datetime.now(ZoneInfo("UTC"))
+    
+    # Define the PST timezone
+    pst_timezone = pytz.timezone('America/Los_Angeles')
+    
+    # Convert UTC time to PST
+    pst_time_dt = now_utc.astimezone(pst_timezone)
+    
+    # Format PST time as MM/DD/YYYY HH:MM:SS AM/PM
+    pst_time = pst_time_dt.strftime('%m/%d/%Y %I:%M:%S %p')
 
     cursor.execute('''
-        INSERT INTO transcribed (utc_time, la_time, video_title, content)
+        INSERT INTO transcribed (utc_time, pst_time, video_title, content)
         VALUES (?, ?, ?, ?)
-    ''', (utc_time, la_time, video_title, content))
+    ''', (utc_time, pst_time, video_title, content))
     conn.commit()
     conn.close()
     print(f"Transcription for '{video_title}' saved to database.")
