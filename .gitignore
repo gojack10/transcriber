@@ -5,3 +5,4 @@ converted/
 *.txt
 *.sqlite
 tmp/
+whisper-cache

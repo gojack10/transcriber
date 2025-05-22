@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  transcription-service:
+    build: .
+    container_name: transcription_service
+    ports:
+      - "8000:8000" # exposes port 8000 on the host
+    environment:
+      # database connection details - please update these with your actual credentials
+      - DB_HOST=host.docker.internal # special dns for host from container. change if db is elsewhere.
+      - DB_PORT=5432
+      - DB_NAME=transcriber_db # replace with your database name
+      - DB_USER=gojack10       # replace with your database user
+      - DB_PASSWORD=moso10     # replace with your database password
+      - WHISPER_MODEL=base.en  # change as needed (e.g., tiny.en, small.en, medium.en)
+      - PYTHONUNBUFFERED=1
+      # if your app needs timezone data, uncomment and set appropriately
+      # - TZ=america/los_angeles 
+    volumes:
+      - ./list.txt:/app/list.txt   # maps your local list.txt to the one in the container
+      - ./tmp:/app/tmp             # maps your local tmp folder
+      - ./whisper-cache:/root/.cache/whisper # persists whisper models to ./whisper-cache on your host
+    # if your service depends on a database also managed by docker-compose, 
+    # you might add:
+    # depends_on:
+    #   - postgres_db # (assuming you name your db service 'postgres_db')
+    restart: unless-stopped
+
+# if you were also managing postgres with docker-compose, it might look like this:
+# (this is just an example, your db seems to be external or host-based)
+# volumes:
+#   postgres_data:
+
+# services:
+#   # ... your transcription-service above
+#   postgres_db:
+#     image: postgres:13
+#     container_name: postgres_transcriber_db
+#     environment:
+#       POSTGRES_USER: gojack10
+#       POSTGRES_PASSWORD: moso10
+#       POSTGRES_DB: transcriber_db
+#     ports:
+#       - "5432:5432"
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#     restart: unless-stopped 

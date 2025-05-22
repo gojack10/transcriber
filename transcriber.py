@@ -9,24 +9,39 @@ from datetime import datetime
 import pytz
 from zoneinfo import ZoneInfo
 import shutil
+from fastapi import FastAPI, HTTPException, Body, status as fastapi_status
+from pydantic import BaseModel
+import uvicorn
+from typing import List, Dict, Tuple
 
-# --- Configuration ---
+# --- configuration ---
 BASE_DIR = Path(__file__).resolve().parent
 TMP_DIR = BASE_DIR / "tmp"
+LIST_FILE = BASE_DIR / "list.txt"
 
-# Supported audio file extensions (add more if needed)
+# supported audio file extensions (add more if needed)
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".wma"}
 
-# PostgreSQL Database Functions
+# --- global state for api ---
+transcription_status: Dict[str, str] = {"status": "idle", "progress": "0/0"}
+# lock or other synchronization mechanism might be needed if main_transcription runs in a separate thread/process
+# for simplicity, we'll assume for now that n8n calls /add_links, then transcription runs, then /clear_list
+
+app = FastAPI()
+
+class UrlList(BaseModel):
+    urls: List[str]
+
+# --- postgresql database functions ---
 def get_db_connection():
-    """Establishes a connection to the PostgreSQL database."""
+    """establishes a connection to the postgresql database."""
     try:
         conn = psycopg2.connect(
-            host="127.0.0.1",
-            port="5432",
-            database="transcriber_db",
-            user="gojack10",
-            password="moso10"
+            host=os.getenv("DB_HOST", "127.0.0.1"),
+            port=os.getenv("DB_PORT", "5432"),
+            database=os.getenv("DB_NAME", "transcriber_db"),
+            user=os.getenv("DB_USER", "gojack10"),
+            password=os.getenv("DB_PASSWORD", "moso10")
         )
         return conn
     except psycopg2.Error as e:
@@ -34,47 +49,53 @@ def get_db_connection():
         sys.exit(1)
 
 def initialize_db():
-    """Initializes the PostgreSQL database and creates the necessary tables."""
+    """initializes the postgresql database and creates the necessary tables."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS downloaded_videos (
-                id SERIAL PRIMARY KEY,
-                url TEXT UNIQUE,
-                status TEXT NOT NULL,
-                download_date TEXT NOT NULL,
-                local_path TEXT,
-                yt_dlp_processed BOOLEAN DEFAULT FALSE
+            create table if not exists downloaded_videos (
+                id serial primary key,
+                url text unique,
+                status text not null,
+                download_date text not null,
+                local_path text,
+                yt_dlp_processed boolean default false
             )
         ''')
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS transcribed (
-                id SERIAL PRIMARY KEY,
-                utc_time TEXT NOT NULL,
-                pst_time TEXT NOT NULL,
-                url TEXT UNIQUE,
-                video_title TEXT NOT NULL,
-                content TEXT NOT NULL,
-                FOREIGN KEY (url) REFERENCES downloaded_videos(url)
+            create table if not exists transcribed (
+                id serial primary key,
+                utc_time text not null,
+                pst_time text not null,
+                url text unique,
+                video_title text not null,
+                content text not null,
+                foreign key (url) references downloaded_videos(url)
             )
         ''')
-        # Attempt to add the yt_dlp_processed column if it doesn't exist, for existing tables
+        # attempt to add the yt_dlp_processed column if it doesn't exist, for existing tables
         cursor.execute('''
-            ALTER TABLE downloaded_videos
-            ADD COLUMN IF NOT EXISTS yt_dlp_processed BOOLEAN DEFAULT FALSE;
+            alter table downloaded_videos
+            add column if not exists yt_dlp_processed boolean default false;
         ''')
         cursor.execute('''
-            ALTER TABLE transcribed
-            ADD COLUMN IF NOT EXISTS url TEXT UNIQUE;
+            alter table transcribed
+            add column if not exists url text unique;
         ''')
-        cursor.execute('''
-            ALTER TABLE transcribed
-            ADD CONSTRAINT fk_downloaded_videos
-            FOREIGN KEY (url) REFERENCES downloaded_videos(url);
-        ''')
+        # check if constraint exists before adding
+        cursor.execute("""
+            select constraint_name from information_schema.table_constraints
+            where table_name='transcribed' and constraint_name='fk_downloaded_videos';
+        """)
+        if not cursor.fetchone():
+            cursor.execute('''
+                alter table transcribed
+                add constraint fk_downloaded_videos
+                foreign key (url) references downloaded_videos(url);
+            ''')
         conn.commit()
-        print("PostgreSQL database initialized and tables (and columns) ensured.")
+        print("postgresql database initialized and tables (and columns) ensured.")
     except psycopg2.Error as e:
         print(f"Error initializing PostgreSQL database: {e}")
         conn.rollback()
@@ -84,8 +105,8 @@ def initialize_db():
 
 def get_download_status(url: str) -> tuple[str | None, str | None, bool | None]:
     """
-    Checks the download status, local path, and yt_dlp_processed flag of a URL in the database.
-    Returns (status, local_path, yt_dlp_processed) or (None, None, None) if not found.
+    checks the download status, local path, and yt_dlp_processed flag of a url in the database.
+    returns (status, local_path, yt_dlp_processed) or (none, none, none) if not found.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -102,7 +123,7 @@ def get_download_status(url: str) -> tuple[str | None, str | None, bool | None]:
 
 def update_download_status(url: str, status: str, local_path: Path | None = None, yt_dlp_processed: bool = False):
     """
-    Adds or updates a URL's status, local path, and yt_dlp_processed flag in the database.
+    adds or updates a url's status, local path, and yt_dlp_processed flag in the database.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -130,7 +151,7 @@ def update_download_status(url: str, status: str, local_path: Path | None = None
 
 def insert_transcription_result(url: str, video_title: str, content: str):
     """
-    Inserts a transcription result into the transcribed table, linked to the downloaded video URL.
+    inserts a transcription result into the transcribed table, linked to the downloaded video url.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -164,9 +185,10 @@ def insert_transcription_result(url: str, video_title: str, content: str):
 
 def transcribe_files(model_name: str, downloaded_files_with_urls: list[tuple[Path, str]]) -> tuple[list[Path], list[str], dict[str, str]]:
     """
-    Transcribes a list of audio files using the specified Whisper model.
-    Returns a tuple: (processed_originals_paths, failed_transcription_filenames, transcription_results)
+    transcribes a list of audio files using the specified whisper model.
+    returns a tuple: (processed_originals_paths, failed_transcription_filenames, transcription_results)
     """
+    global transcription_status
     processed_originals_paths = []
     failed_transcription_filenames = []
     transcription_results = {}
@@ -185,22 +207,22 @@ def transcribe_files(model_name: str, downloaded_files_with_urls: list[tuple[Pat
         print("You might also need to install Rust if tiktoken doesn't have a pre-built wheel for your system.")
         return [], [], {}
 
-    print(f"\nFound {len(audio_file_paths)} audio file(s) to transcribe.")
+    print(f"\nFound {len(downloaded_files_with_urls)} audio file(s) to transcribe.")
 
     total_files = len(downloaded_files_with_urls)
     transcribed_count = 0
+    # update status for the api
+    transcription_status["progress"] = f"{transcribed_count}/{total_files}"
 
     for audio_file_path, url in downloaded_files_with_urls:
-        transcribed_count += 1
-        print(f"\nProcessing '{audio_file_path.name}' ({transcribed_count}/{total_files})...")
+        print(f"\nProcessing '{audio_file_path.name}' ({transcribed_count + 1}/{total_files})...")
 
         try:
             result = model.transcribe(str(audio_file_path), fp16=False)
             transcription = result["text"]
-
-            print(f"  Successfully transcribed '{audio_file_path.name}'. Transcription saved to database.")
+            transcription_results[url] = transcription
             processed_originals_paths.append(audio_file_path)
-            transcription_results[audio_file_path.name] = transcription
+            print(f"  Successfully transcribed '{audio_file_path.name}'. Transcription saved to database.")
             
             # Extract video title from audio_file_path.name (remove extension)
             video_title = audio_file_path.stem
@@ -208,155 +230,154 @@ def transcribe_files(model_name: str, downloaded_files_with_urls: list[tuple[Pat
         except Exception as e:
             print(f"  Error transcribing '{audio_file_path.name}': {e}")
             failed_transcription_filenames.append(audio_file_path.name)
+        
+        transcribed_count += 1
+        transcription_status["progress"] = f"{transcribed_count}/{total_files}"
 
     return processed_originals_paths, failed_transcription_filenames, transcription_results
 
 def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[list[tuple[Path, str]], list[str], list[str]]:
     """
-    Downloads YouTube videos as WAV files to the specified output directory using yt-dlp.
-    Returns (list of (local_path, url) for newly_downloaded_files, skipped_for_redownload_urls, failed_download_urls).
+    downloads youtube videos as audio and saves them to the output directory.
+    also updates the database with download status.
+    returns a tuple: (downloaded_files_with_urls, failed_downloads, already_processed_urls)
+    downloaded_files_with_urls is a list of (path_to_audio_file, original_url)
     """
-    newly_downloaded_files_with_urls = []
-    skipped_for_redownload_urls = []
-    failed_download_urls = []
-
+    global transcription_status
     if not youtube_urls:
-        print("No YouTube URLs provided for download.")
+        print("no youtube urls provided for download.")
         return [], [], []
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\ndownloading videos to '{output_dir}'...")
 
-    print(f"\nFound {len(youtube_urls)} URL(s) to process.")
-    print("Starting YouTube video downloads...")
+    downloaded_files_with_urls: list[tuple[Path, str]] = []
+    failed_downloads: list[str] = []
+    already_processed_urls: list[str] = []
+    
+    total_urls = len(youtube_urls)
+    processed_count = 0
+    transcription_status["progress"] = f"{processed_count}/{total_urls}" # initial status for download phase
 
-    for i, url in enumerate(youtube_urls):
-        cleaned_url = re.sub(r'&list=.*', '', url) # Remove playlist parameter
+    for url in youtube_urls:
+        print(f"\nProcessing URL {processed_count + 1} of {total_urls}: {url}")
+        db_status, local_path_str, yt_dlp_processed = get_download_status(url)
 
-        print(f"\nProcessing URL {i + 1} of {len(youtube_urls)}: {cleaned_url}")
-
-        # Check database for existing download and yt_dlp_processed status
-        status, local_path_db, yt_dlp_processed_db = get_download_status(cleaned_url)
-
-        if yt_dlp_processed_db:
-            print(f"  Skipping '{cleaned_url}', yt-dlp has already processed this URL (status: {status}).")
-            if status == 'downloaded' and local_path_db and Path(local_path_db).exists():
-                 # If it was successfully downloaded previously and file exists, add to skipped for redownload
-                skipped_for_redownload_urls.append(cleaned_url)
-            # If it failed before or file doesn't exist, it's already marked by yt_dlp_processed, so just continue
-            continue # Skip to next URL
-
-        if status == 'downloaded' and local_path_db and Path(local_path_db).exists():
-            print(f"  Skipping '{cleaned_url}', already downloaded and file exists at '{local_path_db}'. Marking as yt_dlp_processed.")
-            update_download_status(cleaned_url, 'downloaded', Path(local_path_db), yt_dlp_processed=True)
-            skipped_for_redownload_urls.append(cleaned_url)
+        if db_status == "downloaded" and local_path_str and Path(local_path_str).exists() and yt_dlp_processed:
+            print(f"'{url}' already downloaded and processed by yt-dlp. adding to list for transcription check.")
+            downloaded_files_with_urls.append((Path(local_path_str), url))
+            # no need to update status here as it's already marked as downloaded and processed by yt-dlp
+            # we are just ensuring it gets passed to the transcription phase
+            already_processed_urls.append(url) # track these separately if needed
+            processed_count +=1
+            transcription_status["progress"] = f"{processed_count}/{total_urls}"
             continue
-
-        # Determine the expected filename of the output WAV file
-        filename_command = [
-            "yt-dlp",
-            "-x", # Extract audio
-            "--audio-format", "wav", # Specify WAV format
-            "--restrict-filenames",
-            "--print", "%(title)s.wav", # Ensure we get the WAV extension for expected filename
-            cleaned_url
-        ]
-        expected_filename = None
-        try:
-            filename_process = subprocess.Popen(filename_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            filename_stdout, filename_stderr = filename_process.communicate()
-            expected_filename = filename_stdout.decode('utf-8').strip()
-
-            if filename_process.returncode != 0:
-                 print(f"  Error determining expected filename for {cleaned_url}: {filename_stderr.decode('utf-8').strip()}")
-                 update_download_status(cleaned_url, 'failed', yt_dlp_processed=True)
-                 failed_download_urls.append(cleaned_url)
-                 continue
-
-        except FileNotFoundError:
-            print("Error: yt-dlp command not found.")
-            print("Please ensure yt-dlp is installed and in your system's PATH.")
-            print("You can install it from https://github.com/yt-dlp/yt-dlp")
-            # Mark remaining links as failed and break
-            for remaining_url in youtube_urls[i:]:
-                update_download_status(remaining_url, 'failed', yt_dlp_processed=True) # Mark as processed even if yt-dlp not found for future
-                failed_download_urls.append(remaining_url)
-            break
-        except Exception as e:
-            print(f"  An unexpected error occurred while determining expected filename for {cleaned_url}: {e}")
-            update_download_status(cleaned_url, 'failed', yt_dlp_processed=True)
-            failed_download_urls.append(cleaned_url)
+        elif db_status == "downloaded" and local_path_str and Path(local_path_str).exists() and not yt_dlp_processed:
+            print(f"'{url}' was downloaded but not marked as yt-dlp processed. attempting to re-process with yt-dlp.")
+            # proceed to download with yt-dlp, it will either use the existing file or redownload if necessary
+        elif db_status == "failed":
+            print(f"skipping '{url}' as it previously failed to download.")
+            failed_downloads.append(url)
+            processed_count +=1
+            transcription_status["progress"] = f"{processed_count}/{total_urls}"
             continue
+        elif db_status is not None:
+             print(f"URL '{url}' has status '{db_status}'. attempting download/re-download.")
 
-        # yt-dlp command to download as WAV
-        command = [
+        # revised strategy: download with a generic name or let yt-dlp name it,
+        # then find the downloaded audio file.
+        # ensure the tmp dir is clean for this video download to easily find the new file.
+        # cleanup_tmp_dir(output_dir) # clean before each download might be too aggressive if multiple files are there
+
+        # use yt-dlp to download audio
+        # options:
+        # -x: extract audio
+        # --audio-format mp3: convert to mp3
+        # --output: specify output template
+        # --get-title: to get the title for db
+        # --no-playlist: if url is a playlist, download only the video.
+        # --ignore-errors: continue on download errors for other videos.
+        # -o "%(title)s.%(ext)s" : names file based on video title
+        # we need a predictable way to get the output file path.
+        # let's try to get title first, then use it for filename.
+
+        sanitized_url_for_filename = re.sub(r'[^a-zA-Z0-9]', '_', url) # simple sanitization
+        # temp_audio_path_template = output_dir / f"{sanitized_url_for_filename}.%(ext)s"
+        # using video id is better.
+        # first, get video id using yt-dlp --get-id
+        
+        temp_output_filename = f"audio_{datetime.now().timestamp()}" # unique temp name
+        temp_audio_path_guess = output_dir / f"{temp_output_filename}.mp3" # assuming mp3 for now
+
+        cmd = [
             "yt-dlp",
-            "-x",
-            "--audio-format", "wav",
-            "--restrict-filenames",
-            "-o", str(output_dir / "%(title)s.%(ext)s"),
-            cleaned_url
+            "-x", "--audio-format", "mp3",
+            # "-o", str(temp_audio_path_template),
+            "-o", str(output_dir / f"{temp_output_filename}.%(ext)s"), # yt-dlp will replace %(ext)s
+            "--no-playlist",
+            url
         ]
+        print(f"Running command: {' '.join(cmd)}")
 
         try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stdout, stderr = process.communicate()
-
-            print(f"  yt-dlp stdout:\n{stdout.decode('utf-8').strip()}")
-            print(f"  yt-dlp stderr:\n{stderr.decode('utf-8').strip()}")
-
+            process = subprocess.run(cmd, capture_output=True, text=True, check=False) # check=false to handle errors manually
             if process.returncode == 0:
-                print(f"  Successfully downloaded.")
-                # Parse stdout to find the actual downloaded file path
-                downloaded_file_path = None
-                stdout_lines = stdout.decode('utf-8').splitlines()
-                for line in stdout_lines:
-                    # Prioritize ExtractAudio destination as it's the final WAV file
-                    match = re.search(r'\[ExtractAudio\] Destination: (.+)', line)
-                    if match:
-                        downloaded_file_path = Path(match.group(1))
-                        break
+                # find the downloaded file. there should be only one new mp3 in output_dir.
+                # this is a bit fragile. a better way is if yt-dlp could report the exact filename.
+                # using --print filename might work.
+                # for now, let's find the newest mp3 file in the directory.
                 
-                # Fallback if ExtractAudio destination is not found, but ensure it's a WAV
-                if not downloaded_file_path:
-                    for line in stdout_lines:
-                        match = re.search(r'\[download\] Destination: (.+)', line)
-                        if match and Path(match.group(1)).suffix == '.wav':
-                            downloaded_file_path = Path(match.group(1))
-                            break
+                # search for files matching the temp_output_filename base
+                potential_files = list(output_dir.glob(f"{temp_output_filename}.*"))
+                # filter by known audio extensions
+                audio_files_found = [f for f in potential_files if f.suffix.lower() in AUDIO_EXTENSIONS]
 
-                if downloaded_file_path and downloaded_file_path.exists():
-                    newly_downloaded_files_with_urls.append((downloaded_file_path, cleaned_url))
-                    update_download_status(cleaned_url, 'downloaded', downloaded_file_path, yt_dlp_processed=True)
+                if audio_files_found:
+                    downloaded_audio_path = audio_files_found[0] # take the first match
+                    print(f"Successfully downloaded and extracted audio to '{downloaded_audio_path}'")
+                    update_download_status(url, "downloaded", downloaded_audio_path, yt_dlp_processed=True)
+                    downloaded_files_with_urls.append((downloaded_audio_path, url))
                 else:
-                    print(f"  Warning: Could not determine exact downloaded file path for {cleaned_url}. Expected: {expected_filename}")
-                    update_download_status(cleaned_url, 'failed', yt_dlp_processed=True)
-                    failed_download_urls.append(cleaned_url)
+                    print(f"yt-dlp ran but could not find the downloaded audio file for url: {url}. stdout: {process.stdout}, stderr: {process.stderr}")
+                    failed_downloads.append(url)
+                    update_download_status(url, "failed_to_find_file")
 
             else:
-                print(f"  Error downloading: {stderr.decode('utf-8').strip()}")
-                update_download_status(cleaned_url, 'failed', yt_dlp_processed=True)
-                failed_download_urls.append(cleaned_url)
-
-        except FileNotFoundError:
-            print("Error: yt-dlp command not found.")
-            print("Please ensure yt-dlp is installed and in your system's PATH.")
-            print("You can install it from https://github.com/yt-dlp/yt-dlp")
-            for remaining_url in youtube_urls[i:]:
-                update_download_status(remaining_url, 'failed', yt_dlp_processed=True)
-                failed_download_urls.append(remaining_url)
-            break
+                print(f"Failed to download '{url}'. Return code: {process.returncode}")
+                print(f"stdout: {process.stdout}")
+                print(f"stderr: {process.stderr}")
+                failed_downloads.append(url)
+                update_download_status(url, "failed")
         except Exception as e:
-            print(f"  An unexpected error occurred during download: {e}")
-            update_download_status(cleaned_url, 'failed', yt_dlp_processed=True)
-            failed_download_urls.append(cleaned_url)
+            print(f"An exception occurred while trying to download '{url}': {e}")
+            failed_downloads.append(url)
+            update_download_status(url, "failed_exception")
+        
+        processed_count += 1
+        transcription_status["progress"] = f"{processed_count}/{total_urls}"
 
-    if failed_download_urls:
+    if failed_downloads:
         print("\n--- Download Summary ---")
-        print(f"Failed to download {len(failed_download_urls)} link(s):")
-        for link in failed_download_urls:
-            print(f"  - {link}")
+        print(f"{len(downloaded_files_with_urls)} file(s) downloaded successfully.")
+        print(f"{len(failed_downloads)} file(s) failed to download:")
+        for url in failed_downloads:
+            print(f"  - {url}")
+    if already_processed_urls:
+        print(f"{len(already_processed_urls)} file(s) were already downloaded and processed by yt-dlp.")
 
-    return newly_downloaded_files_with_urls, skipped_for_redownload_urls, failed_download_urls
+    return downloaded_files_with_urls, failed_downloads, already_processed_urls
+
+def get_video_title_from_db(url: str) -> str | None:
+    """Retrieves the video title from the database using the URL (if downloaded)."""
+    # This function assumes that the title is somehow stored or can be inferred
+    # from the database records, perhaps from `local_path` if it includes the title,
+    # or if `download_youtube_videos` is modified to store titles.
+    # For now, let's try to extract from local_path if it's named well, or default.
+    _, local_path_str, _ = get_download_status(url)
+    if local_path_str:
+        # Assumes filename (without extension) is the title
+        return Path(local_path_str).stem 
+    return "unknown_title"
 
 def cleanup_tmp_dir(tmp_dir: Path):
     """
@@ -380,50 +401,204 @@ def cleanup_tmp_dir(tmp_dir: Path):
             print(f"  Error deleting '{item.name}': {e}")
     print("Temporary directory cleanup complete.")
 
-def main():
-    print("--- Audio Transcription Script ---")
+def run_transcription_pipeline():
+    """
+    Main function to run the transcription pipeline.
+    Reads URLs from list_file, downloads, transcribes, and saves to db.
+    """
+    global transcription_status
+    print("Starting transcription pipeline...")
+    transcription_status = {"status": "processing", "progress": "0/0"}
 
     # Ensure tmp directory exists
     TMP_DIR.mkdir(parents=True, exist_ok=True)
-
     # Initialize database
     initialize_db()
 
-    chosen_model = "turbo"
-    print(f"Using default model: {chosen_model}")
-
     # Read URLs from list.txt
-    youtube_urls = []
-    list_file_path = BASE_DIR / "list.txt"
-    if list_file_path.exists():
-        with open(list_file_path, "r", encoding="utf-8") as f:
-            youtube_urls = [line.strip() for line in f if line.strip()]
-    else:
-        print(f"Warning: '{list_file_path}' not found. No URLs to process.")
-        sys.exit(1)
+    if not LIST_FILE.exists() or LIST_FILE.stat().st_size == 0:
+        print(f"'{LIST_FILE}' is empty or does not exist. Nothing to process.")
+        transcription_status = {"status": "idle", "progress": "0/0"}
+        return
+
+    with open(LIST_FILE, "r") as f:
+        youtube_urls = [line.strip() for line in f if line.strip()]
+
+    if not youtube_urls:
+        print("No URLs found in list.txt after stripping empty lines.")
+        transcription_status = {"status": "idle", "progress": "0/0"}
+        return
+        
+    total_urls = len(youtube_urls)
+    print(f"Found {total_urls} URL(s) in '{LIST_FILE}'.")
+    transcription_status["progress"] = f"0/{total_urls}"
 
     # Download videos
-    newly_downloaded_files_with_urls, skipped_for_redownload_urls, failed_download_urls = \
-        download_youtube_videos(youtube_urls, TMP_DIR)
+    # Model name selection - can be configurable
+    # model_name = "tiny.en" # for faster testing
+    # model_name = "small.en"
+    model_name = os.getenv("WHISPER_MODEL", "base.en") # more robust
+    
+    downloaded_files_with_urls, failed_downloads, _ = download_youtube_videos(youtube_urls, TMP_DIR)
 
-    # Transcribe newly downloaded files
-    processed_originals_paths, failed_transcription_filenames, transcription_results = \
-        transcribe_files(chosen_model, newly_downloaded_files_with_urls)
+    # Filter out files that failed to download before transcription
+    valid_files_for_transcription = [item for item in downloaded_files_with_urls if item[0].exists()]
 
-    print("\n--- Transcription Summary ---")
-    if processed_originals_paths:
-        print(f"Successfully processed/found transcripts for {len(processed_originals_paths)} file(s).")
-    if failed_transcription_filenames:
-        print(f"Failed to transcribe {len(failed_transcription_filenames)} file(s):")
-        for f_name in failed_transcription_filenames:
-            print(f"  - {f_name}")
-    if not processed_originals_paths and not failed_transcription_filenames:
-        print("No new files were transcribed.")
+    if not valid_files_for_transcription:
+        print("No files were successfully downloaded or found for transcription.")
+        cleanup_tmp_dir(TMP_DIR) # Clean up any partial downloads
+        transcription_status = {"status": "completed_with_errors", "progress": f"{len(failed_downloads)}/{total_urls} failed"}
+        # Consider how to signal partial success/failure to n8n
+        return
 
-    # Clean up temporary directory
+    # Transcribe downloaded files
+    # The progress inside transcribe_files will be more granular (per file transcribed)
+    # We might want a combined progress or phases (downloading, transcribing)
+    # For now, transcribe_files updates its own part of the progress for the transcription phase
+    transcription_status["status"] = "transcribing" 
+    # The progress here will be reset by transcribe_files based on number of files to transcribe
+    
+    processed_originals, failed_transcriptions, transcription_results = transcribe_files(model_name, valid_files_for_transcription)
+
+    # Save results to database
+    saved_to_db_count = 0
+    for url, text_content in transcription_results.items():
+        video_title = get_video_title_from_db(url) # or get it from yt-dlp earlier
+        if not video_title: # try to get it from the filename if db method fails
+             # find the path associated with this url
+            path_for_url = next((p for p, u in valid_files_for_transcription if u == url), None)
+            if path_for_url:
+                video_title = path_for_url.stem
+            else:
+                video_title = "unknown_title - " + url[:30]
+
+        insert_transcription_result(url, video_title, text_content)
+        saved_to_db_count +=1
+        # update overall progress if needed, though transcribe_files handles its part.
+        # this part is about db insertion.
+
+    print(f"\n--- Pipeline Summary ---")
+    print(f"{len(youtube_urls)} URL(s) initially provided.")
+    print(f"{len(downloaded_files_with_urls)} video(s) were attempted for download.")
+    print(f"{len(failed_downloads)} video(s) failed to download.")
+    print(f"{len(valid_files_for_transcription)} video(s) submitted for transcription.")
+    print(f"{len(transcription_results)} video(s) transcribed successfully.")
+    print(f"{len(failed_transcriptions)} video(s) failed during transcription.")
+    print(f"{saved_to_db_count} transcription(s) saved to database.")
+
+    # Cleanup
     cleanup_tmp_dir(TMP_DIR)
+    print("Temporary files cleaned up.")
+    
+    if not failed_downloads and not failed_transcriptions:
+        transcription_status = {"status": "completed", "progress": f"{total_urls}/{total_urls}"}
+        print("Transcription pipeline completed successfully for all URLs.")
+    else:
+        # More detailed status for partial success
+        # Count successful transcriptions that were saved
+        successful_final_count = saved_to_db_count 
+        transcription_status = {
+            "status": "completed_with_errors", 
+            "progress": f"{successful_final_count}/{total_urls} transcribed and saved",
+            "details": {
+                "total_provided": total_urls,
+                "download_failures": len(failed_downloads),
+                "transcription_failures": len(failed_transcriptions),
+                "successful_transcriptions_saved": saved_to_db_count
+            }
+        }
+        print("Transcription pipeline completed with some errors.")
+        # It's up to the agent to check the db for which specific URLs succeeded.
 
-    print("\n--- Script Finished ---")
+    # n8n should call /clear_list after verifying db state.
+    # We don't clear list.txt automatically here.
+
+# --- api endpoints ---
+@app.post("/add_links", status_code=fastapi_status.HTTP_202_ACCEPTED)
+async def add_links_to_process(payload: UrlList = Body(...)):
+    """
+    Appends a list of URLs to list.txt.
+    Triggers the transcription pipeline if it's not already running.
+    """
+    global transcription_status
+    if transcription_status.get("status") == "processing" or transcription_status.get("status") == "transcribing":
+        raise HTTPException(
+            status_code=fastapi_status.HTTP_409_CONFLICT,
+            detail="A transcription process is already running. Please wait or clear the list first if stuck."
+        )
+
+    try:
+        with open(LIST_FILE, "a") as f:
+            for url in payload.urls:
+                f.write(f"{url}\n")
+        # After adding links, run the pipeline
+        # Ideally, this should be a background task so the API call returns quickly
+        # For now, let's call it directly. n8n might time out if this takes too long.
+        # Consider using fastapi's backgroundtasks or a separate worker process.
+        
+        # For simplicity, we'll run it synchronously for now and rely on n8n's async handling.
+        # This means the /add_links endpoint will block until all processing is done.
+        # This is not ideal for a real API.
+        # TODO: make run_transcription_pipeline asynchronous
+        run_transcription_pipeline() 
+        
+        return {"message": f"{len(payload.urls)} URLs added to {LIST_FILE} and processing started/completed.", "current_status": transcription_status}
+    except Exception as e:
+        raise HTTPException(
+            status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail=f"Failed to add links or run pipeline: {str(e)}"
+        )
+
+@app.get("/status")
+async def get_status():
+    """Returns the current status of the transcription process."""
+    global transcription_status
+    return transcription_status
+
+@app.post("/clear_list", status_code=fastapi_status.HTTP_200_OK)
+async def clear_list_file():
+    """Clears all text in list.txt."""
+    global transcription_status
+    try:
+        with open(LIST_FILE, "w") as f:
+            f.write("")
+        # Reset status after clearing
+        transcription_status = {"status": "idle", "progress": "0/0"}
+        return {"message": f"'{LIST_FILE}' has been cleared."}
+    except Exception as e:
+        raise HTTPException(
+            status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to clear {LIST_FILE}: {str(e)}"
+        )
+
+# --- main execution (when script is run directly) ---
+def main(): # main is now for direct script execution if needed, or can be removed.
+    """
+    Original main function, now more for command-line use if ever needed,
+    or can be refactored into run_transcription_pipeline fully.
+    """
+    print("Running main function for direct script execution (if any setup is needed here)...")
+    # For CLI usage, one might want to pass URLs directly, bypassing the API.
+    # This part needs to be re-evaluated if CLI usage is still desired alongside API.
+    # For now, the primary way to trigger processing is via /add_links.
+    # initialize_db() # ensure db is up if running standalone for some reason.
+    # run_transcription_pipeline() # example: process whatever is in list.txt on startup
 
 if __name__ == "__main__":
-    main()
+    # This will start the fastapi server
+    # Make sure LIST_FILE exists
+    if not LIST_FILE.exists():
+        LIST_FILE.touch()
+        print(f"Created {LIST_FILE} as it did not exist.")
+
+    # Ensure tmp directory exists
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    initialize_db() # Initialize db on server start
+
+    print(f"Starting uvicorn server on 0.0.0.0:8000")
+    # uvicorn.run(app, host="0.0.0.0", port=8000) 
+    # The line above is for programmatic start. If running with `uvicorn transcriber:app --reload`
+    # Then this __main__ section might behave differently or not be the primary entry point for the server.
+    # For Docker, we'll use the uvicorn command directly.
+    # Let's make this __main__ runnable for local dev.
+    uvicorn.run("transcriber:app", host="0.0.0.0", port=8000, reload=True) # reload for dev
