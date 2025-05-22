@@ -4,42 +4,112 @@ from pathlib import Path
 import sys
 import subprocess
 import re
+import sqlite3
+from datetime import datetime
 
 # --- Configuration ---
 BASE_DIR = Path(__file__).resolve().parent
 UNCONVERTED_DIR = BASE_DIR / "unconverted"
 CONVERTED_DIR = BASE_DIR / "converted"
-DOWNLOAD_ARCHIVE = BASE_DIR / "downloaded_archive.txt"
+DB_PATH = BASE_DIR / "transcription_db.sqlite"
 
 # Supported audio file extensions (add more if needed)
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".wma"}
 
 # ---------------------
+# SQLite Database Functions
+def initialize_db(db_path: Path):
+    """Initializes the SQLite database and creates the downloaded_videos table."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS downloaded_videos (
+            url TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            download_date TEXT NOT NULL,
+            local_path TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS transcribed (
+            utc_time TEXT NOT NULL,
+            la_time TEXT NOT NULL,
+            video_title TEXT NOT NULL,
+            content TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+    print(f"Database '{db_path}' initialized and 'downloaded_videos' table ensured.")
 
-def transcribe_files(model_name):
+def get_download_status(db_path: Path, url: str) -> tuple[str | None, str | None]:
     """
-    Transcribes audio files from UNCONVERTED_DIR to CONVERTED_DIR
+    Checks the download status and local path of a URL in the database.
+    Returns (status, local_path) or (None, None) if not found.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT status, local_path FROM downloaded_videos WHERE url = ?", (url,))
+    result = cursor.fetchone()
+    conn.close()
+    return result if result else (None, None)
+
+def update_download_status(db_path: Path, url: str, status: str, local_path: Path | None = None):
+    """
+    Adds or updates a URL's status and local path in the database.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    download_date = datetime.now().isoformat()
+    local_path_str = str(local_path) if local_path else None
+
+    cursor.execute('''
+        INSERT OR REPLACE INTO downloaded_videos (url, status, download_date, local_path)
+        VALUES (?, ?, ?, ?)
+    ''', (url, status, download_date, local_path_str))
+    conn.commit()
+    conn.close()
+    print(f"Database updated for '{url}' with status '{status}'.")
+
+# ---------------------
+
+def insert_transcription_result(db_path: Path, video_title: str, content: str):
+    """
+    Inserts a transcription result into the transcribed table.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    utc_time = datetime.utcnow().isoformat()
+    la_time = datetime.now().isoformat() # Assuming local time is LA time for simplicity
+
+    cursor.execute('''
+        INSERT INTO transcribed (utc_time, la_time, video_title, content)
+        VALUES (?, ?, ?, ?)
+    ''', (utc_time, la_time, video_title, content))
+    conn.commit()
+    conn.close()
+    print(f"Transcription for '{video_title}' saved to database.")
+
+# ---------------------
+
+def transcribe_files(model_name: str, audio_file_paths: list[Path], converted_dir: Path) -> tuple[list[Path], list[str], dict[str, str]]:
+    """
+    Transcribes a list of audio files to the specified converted directory
     using the specified Whisper model.
-    Returns a list of successfully processed original file paths.
+    Returns a tuple: (processed_originals_paths, failed_transcription_filenames, transcription_results)
     """
-    processed_originals = []
-    failed_files = []
+    processed_originals_paths = []
+    failed_transcription_filenames = []
+    transcription_results = {}
 
-    if not UNCONVERTED_DIR.exists():
-        print(f"Error: Directory '{UNCONVERTED_DIR}' not found.")
-        return [], []
-    if not CONVERTED_DIR.exists():
-        print(f"Creating directory '{CONVERTED_DIR}'...")
-        CONVERTED_DIR.mkdir(parents=True, exist_ok=True)
+    if not converted_dir.exists():
+        print(f"Creating directory '{converted_dir}'...")
+        converted_dir.mkdir(parents=True, exist_ok=True)
 
-    audio_files = [
-        f for f in UNCONVERTED_DIR.iterdir()
-        if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
-    ]
-
-    if not audio_files:
-        print(f"No audio files found in '{UNCONVERTED_DIR}'.")
-        return [], []
+    if not audio_file_paths:
+        print("No audio files provided for transcription.")
+        return [], [], {}
 
     print(f"\nLoading Whisper model '{model_name}'... (This might take a while the first time)")
     try:
@@ -49,69 +119,68 @@ def transcribe_files(model_name):
         print(f"Error loading Whisper model '{model_name}': {e}")
         print("Please ensure the model name is correct and you have enough resources.")
         print("You might also need to install Rust if tiktoken doesn't have a pre-built wheel for your system.")
-        return [], []
+        return [], [], {}
 
+    print(f"\nFound {len(audio_file_paths)} audio file(s) to transcribe.")
 
-    print(f"\nFound {len(audio_files)} audio file(s) to transcribe.")
-
-    # Add counters for transcription progress
-    total_files = len(audio_files)
+    total_files = len(audio_file_paths)
     transcribed_count = 0
 
-    for audio_file_path in audio_files:
-        transcribed_count += 1 # Increment counter for each file processed (even if skipped)
+    for audio_file_path in audio_file_paths:
+        transcribed_count += 1
         print(f"\nProcessing '{audio_file_path.name}' ({transcribed_count}/{total_files})...")
         output_txt_filename = audio_file_path.stem + ".txt"
-        output_txt_path = CONVERTED_DIR / output_txt_filename
-
-        if output_txt_path.exists():
-            print(f"  Skipping '{audio_file_path.name}', transcript '{output_txt_path.name}' already exists.")
-            # We still consider it "processed" for potential deletion later if desired
-            processed_originals.append(audio_file_path)
-            continue
+        output_txt_path = converted_dir / output_txt_filename
 
         try:
-            result = model.transcribe(str(audio_file_path), fp16=False) # fp16=False for broader CPU compatibility
+            result = model.transcribe(str(audio_file_path), fp16=False)
             transcription = result["text"]
 
             with open(output_txt_path, "w", encoding="utf-8") as f:
                 f.write(transcription)
             print(f"  Successfully transcribed. Output: '{output_txt_path}'")
-            processed_originals.append(audio_file_path)
+            processed_originals_paths.append(audio_file_path)
+            transcription_results[audio_file_path.name] = transcription
+            
+            # Extract video title from audio_file_path.name (remove extension)
+            video_title = audio_file_path.stem
+            insert_transcription_result(DB_PATH, video_title, transcription)
         except Exception as e:
             print(f"  Error transcribing '{audio_file_path.name}': {e}")
-            failed_files.append(audio_file_path.name)
+            failed_transcription_filenames.append(audio_file_path.name)
 
-    return processed_originals, failed_files
+    return processed_originals_paths, failed_transcription_filenames, transcription_results
 
-def download_youtube_videos(list_file_path, output_dir):
+def download_youtube_videos(youtube_urls: list[str], output_dir: Path, db_path: Path) -> tuple[list[Path], list[str], list[str]]:
     """
-    Reads YouTube links from a file, cleans them, and downloads them as WAV files
-    to the specified output directory using yt-dlp.
+    Downloads YouTube videos as WAV files to the specified output directory using yt-dlp,
+    integrating with an SQLite database for tracking.
+    Returns (newly_downloaded_files, skipped_for_redownload_urls, failed_download_urls).
     """
-    if not list_file_path.exists():
-        print(f"Error: List file '{list_file_path}' not found.")
-        return []
+    newly_downloaded_files = []
+    skipped_for_redownload_urls = []
+    failed_download_urls = []
 
-    downloaded_files = []
-    failed_downloads = []
+    if not youtube_urls:
+        print("No YouTube URLs provided for download.")
+        return [], [], []
 
-    with open(list_file_path, 'r', encoding='utf-8') as f:
-        links = [line.strip() for line in f if line.strip()] # Read non-empty lines
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    if not links:
-        print(f"No links found in '{list_file_path}'.")
-        return []
-
-    print(f"\nFound {len(links)} link(s) in '{list_file_path}'.")
+    print(f"\nFound {len(youtube_urls)} URL(s) to process.")
     print("Starting YouTube video downloads...")
 
-    output_dir.mkdir(parents=True, exist_ok=True) # Ensure output directory exists
+    for i, url in enumerate(youtube_urls):
+        cleaned_url = re.sub(r'&list=.*', '', url) # Remove playlist parameter
 
-    for i, link in enumerate(links):
-        cleaned_link = re.sub(r'&list=.*', '', link) # Remove playlist parameter
+        print(f"\nProcessing URL {i + 1} of {len(youtube_urls)}: {cleaned_url}")
 
-        print(f"\nDownloading video {i + 1} of {len(links)}: {cleaned_link}")
+        # Check database for existing download
+        status, local_path_db = get_download_status(db_path, cleaned_url)
+        if status == 'downloaded' and local_path_db and Path(local_path_db).exists():
+            print(f"  Skipping '{cleaned_url}', already downloaded and file exists at '{local_path_db}'.")
+            skipped_for_redownload_urls.append(cleaned_url)
+            continue
 
         # Determine the expected filename of the output WAV file
         filename_command = [
@@ -119,148 +188,171 @@ def download_youtube_videos(list_file_path, output_dir):
             "-x", # Extract audio
             "--audio-format", "wav", # Specify WAV format
             "--restrict-filenames",
-            "--print", "%(title)s.%(ext)s",
-            cleaned_link
+            "--print", "%(title)s.wav", # Ensure we get the WAV extension for expected filename
+            cleaned_url
         ]
+        expected_filename = None
         try:
             filename_process = subprocess.Popen(filename_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             filename_stdout, filename_stderr = filename_process.communicate()
             expected_filename = filename_stdout.decode('utf-8').strip()
 
             if filename_process.returncode != 0:
-                 print(f"  Error determining expected filename for {cleaned_link}: {filename_stderr.decode('utf-8').strip()}")
-                 failed_downloads.append(cleaned_link)
-                 continue # Skip to the next link if filename cannot be determined
+                 print(f"  Error determining expected filename for {cleaned_url}: {filename_stderr.decode('utf-8').strip()}")
+                 update_download_status(db_path, cleaned_url, 'failed')
+                 failed_download_urls.append(cleaned_url)
+                 continue
 
         except FileNotFoundError:
             print("Error: yt-dlp command not found.")
             print("Please ensure yt-dlp is installed and in your system's PATH.")
             print("You can install it from https://github.com/yt-dlp/yt-dlp")
-            failed_downloads.extend(links[i:]) # Mark remaining links as failed
-            break # Stop processing if yt-dlp is not found
+            # Mark remaining links as failed and break
+            for remaining_url in youtube_urls[i:]:
+                update_download_status(db_path, remaining_url, 'failed')
+                failed_download_urls.append(remaining_url)
+            break
         except Exception as e:
-            print(f"  An unexpected error occurred while determining expected filename for {cleaned_link}: {e}")
-            failed_downloads.append(cleaned_link)
-            continue # Skip to the next link on unexpected error
+            print(f"  An unexpected error occurred while determining expected filename for {cleaned_url}: {e}")
+            update_download_status(db_path, cleaned_url, 'failed')
+            failed_download_urls.append(cleaned_url)
+            continue
 
         # yt-dlp command to download as WAV
-        # -x: extract audio
-        # --audio-format wav: specify wav format
-        # -o: output file template. %(title)s is the video title, .%(ext)s is the extension
-        # --restrict-filenames: keep filenames simple
         command = [
             "yt-dlp",
             "-x",
             "--audio-format", "wav",
             "--restrict-filenames",
             "-o", str(output_dir / "%(title)s.%(ext)s"),
-            "--download-archive", str(BASE_DIR / "downloaded_archive.txt"),
-            cleaned_link
+            cleaned_url
         ]
 
         try:
-            # Execute the command
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             stdout, stderr = process.communicate()
 
-            # Print stdout and stderr for debugging
             print(f"  yt-dlp stdout:\n{stdout.decode('utf-8').strip()}")
             print(f"  yt-dlp stderr:\n{stderr.decode('utf-8').strip()}")
 
             if process.returncode == 0:
                 print(f"  Successfully downloaded.")
-                # Note: We don't have the exact downloaded filename here easily,
-                # but the transcribe function will find it in the directory.
-                downloaded_files.append(cleaned_link) # Store the link for tracking
+                # Parse stdout to find the actual downloaded file path
+                downloaded_file_path = None
+                stdout_lines = stdout.decode('utf-8').splitlines()
+                for line in stdout_lines:
+                    # Prioritize ExtractAudio destination as it's the final WAV file
+                    match = re.search(r'\[ExtractAudio\] Destination: (.+)', line)
+                    if match:
+                        downloaded_file_path = Path(match.group(1))
+                        break
+                
+                # Fallback if ExtractAudio destination is not found, but ensure it's a WAV
+                if not downloaded_file_path:
+                    for line in stdout_lines:
+                        match = re.search(r'\[download\] Destination: (.+)', line)
+                        if match and Path(match.group(1)).suffix == '.wav':
+                            downloaded_file_path = Path(match.group(1))
+                            break
+
+                if downloaded_file_path and downloaded_file_path.exists():
+                    newly_downloaded_files.append(downloaded_file_path)
+                    update_download_status(db_path, cleaned_url, 'downloaded', downloaded_file_path)
+                else:
+                    print(f"  Warning: Could not determine exact downloaded file path for {cleaned_url}. Expected: {expected_filename}")
+                    update_download_status(db_path, cleaned_url, 'failed')
+                    failed_download_urls.append(cleaned_url)
+
             else:
                 print(f"  Error downloading: {stderr.decode('utf-8').strip()}")
-                failed_downloads.append(cleaned_link)
+                update_download_status(db_path, cleaned_url, 'failed')
+                failed_download_urls.append(cleaned_url)
 
         except FileNotFoundError:
             print("Error: yt-dlp command not found.")
             print("Please ensure yt-dlp is installed and in your system's PATH.")
             print("You can install it from https://github.com/yt-dlp/yt-dlp")
-            failed_downloads.extend(links[i:]) # Mark remaining links as failed
-            break # Stop processing if yt-dlp is not found
+            for remaining_url in youtube_urls[i:]:
+                update_download_status(db_path, remaining_url, 'failed')
+                failed_download_urls.append(remaining_url)
+            break
         except Exception as e:
             print(f"  An unexpected error occurred during download: {e}")
-            failed_downloads.append(cleaned_link)
+            update_download_status(db_path, cleaned_url, 'failed')
+            failed_download_urls.append(cleaned_url)
 
-    if failed_downloads:
+    if failed_download_urls:
         print("\n--- Download Summary ---")
-        print(f"Failed to download {len(failed_downloads)} link(s):")
-        for link in failed_downloads:
+        print(f"Failed to download {len(failed_download_urls)} link(s):")
+        for link in failed_download_urls:
             print(f"  - {link}")
 
-    return downloaded_files
+    return newly_downloaded_files, skipped_for_redownload_urls, failed_download_urls
 
+def delete_processed_files(file_paths: list[Path]):
+    """
+    Deletes a list of files.
+    """
+    if not file_paths:
+        print("No files to delete.")
+        return
+
+    print("\n--- Automatic Deletion ---")
+    print("Automatically deleting the following original audio files:")
+    deleted_count = 0
+    for f_path in file_paths:
+        print(f"  - {f_path.name}")
+        try:
+            f_path.unlink()
+            print(f"  Deleted '{f_path.name}'")
+            deleted_count += 1
+        except Exception as e:
+            print(f"  Error deleting '{f_path.name}': {e}")
+    print(f"{deleted_count} file(s) deleted.")
 
 def main():
     print("--- Audio Transcription Script ---")
 
-    if not UNCONVERTED_DIR.is_dir():
-        print(f"Error: The 'unconverted' directory ('{UNCONVERTED_DIR}') does not exist.")
-        print("Please create it and place your audio files inside.")
-        sys.exit(1)
-
+    # Ensure directories exist
+    UNCONVERTED_DIR.mkdir(parents=True, exist_ok=True)
     CONVERTED_DIR.mkdir(parents=True, exist_ok=True)
 
-    if not DOWNLOAD_ARCHIVE.exists():
-        print(f"Creating download archive file '{DOWNLOAD_ARCHIVE}'...")
-        DOWNLOAD_ARCHIVE.touch()
+    # Initialize database
+    initialize_db(DB_PATH)
 
     chosen_model = "turbo"
     print(f"Using default model: {chosen_model}")
 
-    # Download videos from list.txt
+    # Read URLs from list.txt
+    youtube_urls = []
     list_file_path = BASE_DIR / "list.txt"
-    downloaded_links = download_youtube_videos(list_file_path, UNCONVERTED_DIR)
-
-    # Proceed with transcription if there are files in the unconverted directory
-    audio_files_to_transcribe = [
-        f for f in UNCONVERTED_DIR.iterdir()
-        if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
-    ]
-
-    successfully_processed_originals = []
-    failed_files = []
-
-    if audio_files_to_transcribe:
-        successfully_processed_originals, failed_files = transcribe_files(chosen_model)
+    if list_file_path.exists():
+        with open(list_file_path, "r", encoding="utf-8") as f:
+            youtube_urls = [line.strip() for line in f if line.strip()]
     else:
-        print("\nNo audio files found in 'unconverted' directory after download. Skipping transcription.")
+        print(f"Warning: '{list_file_path}' not found. No URLs to process.")
+        sys.exit(1)
 
+    # Download videos
+    newly_downloaded_files, skipped_for_redownload_urls, failed_download_urls = \
+        download_youtube_videos(youtube_urls, UNCONVERTED_DIR, DB_PATH)
+
+    # Transcribe newly downloaded files
+    processed_originals_paths, failed_transcription_filenames, transcription_results = \
+        transcribe_files(chosen_model, newly_downloaded_files, CONVERTED_DIR)
 
     print("\n--- Transcription Summary ---")
-    if successfully_processed_originals:
-        print(f"Successfully processed/found transcripts for {len(successfully_processed_originals)} file(s).")
-    if failed_files:
-        print(f"Failed to transcribe {len(failed_files)} file(s):")
-        for f_name in failed_files:
+    if processed_originals_paths:
+        print(f"Successfully processed/found transcripts for {len(processed_originals_paths)} file(s).")
+    if failed_transcription_filenames:
+        print(f"Failed to transcribe {len(failed_transcription_filenames)} file(s):")
+        for f_name in failed_transcription_filenames:
             print(f"  - {f_name}")
-    if not successfully_processed_originals and not failed_files and UNCONVERTED_DIR.exists() and any(UNCONVERTED_DIR.iterdir()):
-        print("No new files were processed (either no audio files found or all transcripts already exist).")
-    elif not UNCONVERTED_DIR.exists() or not any(f for f in UNCONVERTED_DIR.iterdir() if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS):
-         if not failed_files: # Avoid double message if loading model failed
-            print("No audio files were found in the 'unconverted' directory to process.")
+    if not processed_originals_paths and not failed_transcription_filenames:
+        print("No new files were transcribed.")
 
-
-    if successfully_processed_originals:
-        print("\n--- Automatic Deletion ---")
-        print("Automatically deleting the following original audio files from 'unconverted':")
-        deleted_count = 0
-        for f_path in successfully_processed_originals:
-            print(f"  - {f_path.name}")
-            try:
-                f_path.unlink() # Deletes the file
-                print(f"  Deleted '{f_path.name}'")
-                deleted_count += 1
-            except Exception as e:
-                print(f"  Error deleting '{f_path.name}': {e}")
-        print(f"{deleted_count} file(s) deleted.")
-    elif not failed_files: # Only show this if no files were processed and no errors occurred earlier
-        print("\nNo files were processed, so no deletion needed.")
-
+    # Delete processed original audio files
+    delete_processed_files(processed_originals_paths)
 
     print("\n--- Script Finished ---")
 
