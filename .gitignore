@@ -1,8 +1,12 @@
 __pycache__/
-.venv
+.*
 unconverted/
 converted/
 *.txt
 *.sqlite
 tmp/
 whisper-cache
+!.gitignore
+!requirements-dev.txt
+!requirements.txt
+
