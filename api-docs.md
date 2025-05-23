@@ -165,6 +165,90 @@ Assuming the service is running and accessible (e.g., `http://localhost:8000` or
 
 ---
 
+## New Endpoints for AI Agent Access
+
+These endpoints are designed to allow an AI agent to query and retrieve information about transcribed videos.
+
+### 5. List All Transcribed Videos
+
+*   **HTTP Method:** `GET`
+*   **Path:** `/transcribed_videos`
+*   **Purpose:** Retrieves a list of all videos that have been successfully transcribed and recorded in the database.
+*   **Request Body:** None
+*   **Success Response (Status Code `200 OK`):**
+    Returns a JSON object containing a list of videos, each with its database `id`, `url`, and `video_title`.
+    ```json
+    {
+      "videos": [
+        {
+          "id": 1,
+          "url": "https://www.youtube.com/watch?v=xxxxxxx",
+          "video_title": "Video Title X"
+        },
+        {
+          "id": 2,
+          "url": "https://www.youtube.com/watch?v=yyyyyyy",
+          "video_title": "Video Title Y"
+        }
+      ]
+    }
+    ```
+    If no videos are transcribed, it returns an empty list:
+    ```json
+    {
+      "videos": []
+    }
+    ```
+*   **Error Responses:** None explicitly defined beyond standard HTTP errors.
+
+### 6. Get Transcription Content Summary
+
+*   **HTTP Method:** `GET`
+*   **Path:** `/transcribed_content_summary/{video_url}`
+    *   Replace `{video_url}` with the URL-encoded full YouTube URL (e.g., `https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dxxxxxxx`).
+*   **Purpose:** Retrieves a short summary (the first 100 words) of the transcribed content for a specific video.
+*   **Request Body:** None
+*   **Success Response (Status Code `200 OK`):**
+    Returns the URL and a `summary` of the transcription.
+    ```json
+    {
+      "url": "https://www.youtube.com/watch?v=xxxxxxx",
+      "summary": "this is the beginning of the transcribed text up to approximately one hundred words..."
+    }
+    ```
+*   **Error Responses:**
+    *   **Status Code `404 Not Found`:** If no transcription content is found for the given URL.
+        ```json
+        {
+          "detail": "transcription content not found for this url."
+        }
+        ```
+
+### 7. Get Full Transcription Content
+
+*   **HTTP Method:** `GET`
+*   **Path:** `/transcribed_content_full/{video_url}`
+    *   Replace `{video_url}` with the URL-encoded full YouTube URL.
+*   **Purpose:** Retrieves the complete transcribed text for a specific video. This is intended for an agent to load the full text into its context for summarization or other analysis.
+*   **Request Body:** None
+*   **Success Response (Status Code `200 OK`):**
+    Returns the URL and the full `content` of the transcription.
+    ```json
+    {
+      "url": "https://www.youtube.com/watch?v=xxxxxxx",
+      "content": "this is the full transcribed text of the video... it can be very long..."
+    }
+    ```
+*   **Error Responses:**
+    *   **Status Code `404 Not Found`:** If no transcription content is found for the given URL.
+        ```json
+        {
+          "detail": "transcription content not found for this url."
+        }
+        ```
+
+---
+
 ## Environment Variables for the Service
 
 When running the service (e.g., via Docker or `docker-compose.yml`), the following environment variables can be set:

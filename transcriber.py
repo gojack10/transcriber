@@ -19,6 +19,22 @@ from fastapi.responses import JSONResponse
 class UrlList(BaseModel):
     urls: List[str]
 
+class TranscribedVideoInfo(BaseModel):
+    id: int
+    url: str
+    video_title: str
+
+class TranscribedVideoList(BaseModel):
+    videos: List[TranscribedVideoInfo]
+
+class ContentSummary(BaseModel):
+    url: str
+    summary: str
+
+class FullContent(BaseModel):
+    url: str
+    content: str
+
 # --- configuration ---
 BASE_DIR = Path(__file__).resolve().parent
 TMP_DIR = BASE_DIR / "tmp"
@@ -125,6 +141,34 @@ def create_app() -> FastAPI:
                 status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"failed to clear {LIST_FILE}: {e}"
             )
+
+    @_app.get("/transcribed_videos", response_model=TranscribedVideoList)
+    async def list_transcribed_videos():
+        """lists all transcribed videos with their id, url, and title."""
+        videos_data = get_all_transcribed_videos()
+        if not videos_data:
+            return TranscribedVideoList(videos=[])
+        return TranscribedVideoList(videos=[
+            TranscribedVideoInfo(id=video_id, url=url, video_title=title)
+            for video_id, url, title in videos_data
+        ])
+
+    @_app.get("/transcribed_content_summary/{video_url:path}", response_model=ContentSummary)
+    async def get_content_summary(video_url: str):
+        """returns a summary (first 100 words) of the transcribed content for a given video url."""
+        _, content = get_transcription_content_by_url(video_url)
+        if content is None:
+            raise HTTPException(status_code=fastapi_status.HTTP_404_NOT_FOUND, detail="transcription content not found for this url.")
+        summary = " ".join(content.split()[:100])
+        return ContentSummary(url=video_url, summary=summary)
+
+    @_app.get("/transcribed_content_full/{video_url:path}", response_model=FullContent)
+    async def get_full_content(video_url: str):
+        """returns the full transcribed content for a given video url."""
+        _, content = get_transcription_content_by_url(video_url)
+        if content is None:
+            raise HTTPException(status_code=fastapi_status.HTTP_404_NOT_FOUND, detail="transcription content not found for this url.")
+        return FullContent(url=video_url, content=content)
 
     return _app # return _app
 
@@ -478,6 +522,19 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[
     processed_count = 0
     transcription_status["progress"] = f"{processed_count}/{total_urls}" # initial status for download phase
 
+    def sanitize_filename(title: str) -> str:
+        """sanitize video title for use as filename - replace special chars with underscores."""
+        # remove or replace problematic characters
+        sanitized = re.sub(r'[<>:"/\\|?*]', '_', title)  # windows forbidden chars
+        sanitized = re.sub(r'[^\w\s\-_\.]', '_', sanitized)  # keep only word chars, spaces, hyphens, underscores, dots
+        sanitized = re.sub(r'\s+', '_', sanitized)  # replace spaces with underscores
+        sanitized = re.sub(r'_+', '_', sanitized)  # collapse multiple underscores
+        sanitized = sanitized.strip('_')  # remove leading/trailing underscores
+        # limit length to avoid filesystem issues
+        if len(sanitized) > 200:
+            sanitized = sanitized[:200]
+        return sanitized or "untitled_video"  # fallback if sanitization results in empty string
+
     for url in youtube_urls:
         print(f"\nProcessing URL {processed_count + 1} of {total_urls}: {url}")
         db_status, local_path_str, yt_dlp_processed = get_download_status(url)
@@ -503,36 +560,37 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[
         elif db_status is not None:
              print(f"URL '{url}' has status '{db_status}'. attempting download/re-download.")
 
-        # revised strategy: download with a generic name or let yt-dlp name it,
-        # then find the downloaded audio file.
-        # ensure the tmp dir is clean for this video download to easily find the new file.
-        # cleanup_tmp_dir(output_dir) # clean before each download might be too aggressive if multiple files are there
+        # first, get the video title using yt-dlp
+        print(f"getting video title for: {url}")
+        title_cmd = [
+            "yt-dlp",
+            "--get-title",
+            "--no-playlist",
+            url
+        ]
 
-        # use yt-dlp to download audio
-        # options:
-        # -x: extract audio
-        # --audio-format mp3: convert to mp3
-        # --output: specify output template
-        # --get-title: to get the title for db
-        # --no-playlist: if url is a playlist, download only the video.
-        # --ignore-errors: continue on download errors for other videos.
-        # -o "%(title)s.%(ext)s" : names file based on video title
-        # we need a predictable way to get the output file path.
-        # let's try to get title first, then use it for filename.
+        try:
+            title_process = subprocess.run(title_cmd, capture_output=True, text=True, check=False)
+            if title_process.returncode == 0:
+                raw_title = title_process.stdout.strip()
+                sanitized_title = sanitize_filename(raw_title)
+                print(f"video title: '{raw_title}' -> sanitized: '{sanitized_title}'")
+            else:
+                print(f"failed to get title for '{url}', using fallback name")
+                print(f"title command stderr: {title_process.stderr}")
+                sanitized_title = f"video_{datetime.now().timestamp()}"
+        except Exception as e:
+            print(f"exception while getting title for '{url}': {e}")
+            sanitized_title = f"video_{datetime.now().timestamp()}"
 
-        sanitized_url_for_filename = re.sub(r'[^a-zA-Z0-9]', '_', url) # simple sanitization
-        # temp_audio_path_template = output_dir / f"{sanitized_url_for_filename}.%(ext)s"
-        # using video id is better.
-        # first, get video id using yt-dlp --get-id
-        
-        temp_output_filename = f"audio_{datetime.now().timestamp()}" # unique temp name
-        temp_audio_path_guess = output_dir / f"{temp_output_filename}.mp3" # assuming mp3 for now
+        # now download with the sanitized title as filename
+        output_filename = sanitized_title
+        audio_path = output_dir / f"{output_filename}.mp3"  # we'll let yt-dlp determine the final extension
 
         cmd = [
             "yt-dlp",
             "-x", "--audio-format", "mp3",
-            # "-o", str(temp_audio_path_template),
-            "-o", str(output_dir / f"{temp_output_filename}.%(ext)s"), # yt-dlp will replace %(ext)s
+            "-o", str(output_dir / f"{output_filename}.%(ext)s"), # yt-dlp will replace %(ext)s
             "--no-playlist",
             url
         ]
@@ -541,13 +599,8 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[
         try:
             process = subprocess.run(cmd, capture_output=True, text=True, check=False) # check=false to handle errors manually
             if process.returncode == 0:
-                # find the downloaded file. there should be only one new mp3 in output_dir.
-                # this is a bit fragile. a better way is if yt-dlp could report the exact filename.
-                # using --print filename might work.
-                # for now, let's find the newest mp3 file in the directory.
-                
-                # search for files matching the temp_output_filename base
-                potential_files = list(output_dir.glob(f"{temp_output_filename}.*"))
+                # find the downloaded file based on the sanitized title
+                potential_files = list(output_dir.glob(f"{output_filename}.*"))
                 # filter by known audio extensions
                 audio_files_found = [f for f in potential_files if f.suffix.lower() in AUDIO_EXTENSIONS]
 
@@ -588,22 +641,40 @@ def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[
 
 def get_video_title_from_db(url: str) -> str | None:
     """retrieves the video title from the database using the url (if downloaded)."""
-    # this function assumes that the title is somehow stored or can be inferred
-    # from the database records, perhaps from `local_path` if it includes the title,
-    # or if `download_youtube_videos` is modified to store titles.
-    # for now, let's try to extract from local_path if it's named well, or default.
-    
-    # try to get title from local_path first, as it's likely named by yt-dlp based on title
+    # try to get title from local_path first, as it's now named by the actual video title
     _, local_path_str, _ = get_download_status(url)
     if local_path_str:
-        # assumes filename (without extension) is the title
-        # this stem might include unique ids if yt-dlp added them, but it's usually close to the title.
-        # for a more accurate title, it should be fetched during yt-dlp processing if possible and stored.
-        title = Path(local_path_str).stem
-        # crude way to remove common yt-dlp id patterns if they are at the end, e.g. [id_string] or _id_string
-        title = re.sub(r'\s*\[[\w-]{11}\]$|\s*\[[\w-]{10}\]$|\s*_[\w-]{11}$|\s*_[\w-]{10}$', '', title)
-        return title
-    return f"unknown_title_for_{url[:30]}" # fallback
+        # extract filename without extension - this should be the sanitized video title
+        title_from_filename = Path(local_path_str).stem
+        
+        # convert underscores back to spaces for better readability
+        # but keep some underscores if they seem intentional (like around numbers/codes)
+        readable_title = re.sub(r'_+', ' ', title_from_filename)
+        readable_title = readable_title.strip()
+        
+        # if it looks like one of our fallback names, try to get title from yt-dlp
+        if readable_title.startswith(('video_', 'audio_', 'untitled_video')):
+            print(f"detected fallback filename for {url}, attempting to get real title from yt-dlp")
+            try:
+                title_cmd = [
+                    "yt-dlp",
+                    "--get-title", 
+                    "--no-playlist",
+                    url
+                ]
+                title_process = subprocess.run(title_cmd, capture_output=True, text=True, check=False, timeout=30)
+                if title_process.returncode == 0:
+                    real_title = title_process.stdout.strip()
+                    if real_title:
+                        print(f"got real title from yt-dlp: '{real_title}'")
+                        return real_title
+            except Exception as e:
+                print(f"failed to get real title from yt-dlp for {url}: {e}")
+        
+        return readable_title if readable_title else "unknown title"
+    
+    # fallback if no local path found
+    return f"unknown_title_for_{url[:30]}"
 
 def cleanup_tmp_dir(tmp_dir: Path):
     """
@@ -793,6 +864,43 @@ def run_transcription_pipeline():
         print(f"CRITICAL ERROR in run_transcription_pipeline: {e}") # added for better error logging
         # optionally re-raise or handle more gracefully depending on desired behavior for background tasks
         # for now, it just logs and sets status to "error"
+
+def get_all_transcribed_videos() -> List[Tuple[int, str, str]]:
+    """fetches id, url, and video_title for all videos in the transcribed table."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    videos: List[Tuple[int, str, str]] = []
+    try:
+        cursor.execute("SELECT id, url, video_title FROM transcribed ORDER BY id")
+        results = cursor.fetchall()
+        for row in results:
+            videos.append((row[0], row[1], row[2])) # id, url, video_title
+    except psycopg2.Error as e:
+        print(f"error fetching all transcribed videos: {e}")
+    finally:
+        cursor.close()
+        conn.close()
+    return videos
+
+def get_transcription_content_by_url(url: str) -> Tuple[str | None, str | None]:
+    """
+    fetches the video_title and content of a transcription from the database by its url.
+    returns (video_title, content) or (none, none) if not found or error.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    result: Tuple[str | None, str | None] = (None, None)
+    try:
+        cursor.execute("SELECT video_title, content FROM transcribed WHERE url = %s", (url,))
+        row = cursor.fetchone()
+        if row:
+            result = (row[0], row[1]) # video_title, content
+    except psycopg2.Error as e:
+        print(f"error getting transcription content by url {url}: {e}")
+    finally:
+        cursor.close()
+        conn.close()
+    return result
 
 # --- main execution (when script is run directly) ---
 def main(): # main is now for direct script execution if needed, or can be removed.
