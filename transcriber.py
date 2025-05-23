@@ -131,6 +131,80 @@ def create_app() -> FastAPI:
 app = create_app() # Initialize app globally
 
 # --- postgresql database functions ---
+def check_database_exists() -> bool:
+    """check if the target database exists."""
+    try:
+        # connect to default postgres database first
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST", "127.0.0.1"),
+            port=os.getenv("DB_PORT", "5432"),
+            database="postgres",  # connect to default postgres db
+            user=os.getenv("DB_USER", "gojack10"),
+            password=os.getenv("DB_PASSWORD", "moso10")
+        )
+        cursor = conn.cursor()
+        
+        db_name = os.getenv("DB_NAME", "transcriber_db")
+        cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
+        exists = cursor.fetchone() is not None
+        
+        cursor.close()
+        conn.close()
+        return exists
+        
+    except psycopg2.Error as e:
+        print(f"error checking if database exists: {e}")
+        return False
+
+def create_database_if_not_exists():
+    """create the database if it doesn't exist."""
+    try:
+        # connect to default postgres database first
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST", "127.0.0.1"),
+            port=os.getenv("DB_PORT", "5432"),
+            database="postgres",  # connect to default postgres db
+            user=os.getenv("DB_USER", "gojack10"),
+            password=os.getenv("DB_PASSWORD", "moso10")
+        )
+        conn.autocommit = True
+        cursor = conn.cursor()
+        
+        db_name = os.getenv("DB_NAME", "transcriber_db")
+        
+        # check if database exists
+        cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
+        if not cursor.fetchone():
+            cursor.execute(f"CREATE DATABASE {db_name}")
+            print(f"created database: {db_name}")
+            return True
+        else:
+            print(f"database {db_name} already exists")
+            return False
+            
+    except psycopg2.Error as e:
+        print(f"error creating database: {e}")
+        return False
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        if 'conn' in locals():
+            conn.close()
+
+def check_table_exists(cursor, table_name: str) -> bool:
+    """check if a table exists in the current database."""
+    try:
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = %s
+            );
+        """, (table_name,))
+        return cursor.fetchone()[0]
+    except psycopg2.Error as e:
+        print(f"error checking if table {table_name} exists: {e}")
+        return False
+
 def get_db_connection():
     """establishes a connection to the postgresql database."""
     try:
@@ -148,55 +222,96 @@ def get_db_connection():
 
 def initialize_db():
     """initializes the postgresql database and creates the necessary tables."""
+    print("initializing postgresql database...")
+    
+    # step 1: ensure database exists
+    if not check_database_exists():
+        print("database not found, attempting to create it...")
+        if not create_database_if_not_exists():
+            print("failed to create database. exiting.")
+            sys.exit(1)
+    else:
+        print("database exists, proceeding with table checks...")
+    
+    # step 2: connect to target database and check/create tables
     conn = get_db_connection()
     cursor = conn.cursor()
+    
     try:
-        cursor.execute('''
-            create table if not exists downloaded_videos (
-                id serial primary key,
-                url text unique,
-                status text not null,
-                download_date text not null,
-                local_path text,
-                yt_dlp_processed boolean default false
-            )
-        ''')
-        cursor.execute('''
-            create table if not exists transcribed (
-                id serial primary key,
-                utc_time text not null,
-                pst_time text not null,
-                url text unique,
-                video_title text not null,
-                content text not null,
-                foreign key (url) references downloaded_videos(url)
-            )
-        ''')
-        # attempt to add the yt_dlp_processed column if it doesn't exist, for existing tables
-        cursor.execute('''
-            alter table downloaded_videos
-            add column if not exists yt_dlp_processed boolean default false;
-        ''')
-        cursor.execute('''
-            alter table transcribed
-            add column if not exists url text unique;
-        ''')
-        # check if constraint exists before adding
+        # check and create downloaded_videos table
+        if not check_table_exists(cursor, 'downloaded_videos'):
+            print("creating 'downloaded_videos' table...")
+            cursor.execute('''
+                CREATE TABLE downloaded_videos (
+                    id SERIAL PRIMARY KEY,
+                    url TEXT UNIQUE,
+                    status TEXT NOT NULL,
+                    download_date TEXT NOT NULL,
+                    local_path TEXT,
+                    yt_dlp_processed BOOLEAN DEFAULT false
+                )
+            ''')
+            print("'downloaded_videos' table created successfully.")
+        else:
+            print("'downloaded_videos' table already exists.")
+            # ensure yt_dlp_processed column exists for existing tables
+            cursor.execute('''
+                ALTER TABLE downloaded_videos
+                ADD COLUMN IF NOT EXISTS yt_dlp_processed BOOLEAN DEFAULT false;
+            ''')
+        
+        # check and create transcribed table
+        if not check_table_exists(cursor, 'transcribed'):
+            print("creating 'transcribed' table...")
+            cursor.execute('''
+                CREATE TABLE transcribed (
+                    id SERIAL PRIMARY KEY,
+                    utc_time TEXT NOT NULL,
+                    pst_time TEXT NOT NULL,
+                    url TEXT UNIQUE,
+                    video_title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    FOREIGN KEY (url) REFERENCES downloaded_videos(url)
+                )
+            ''')
+            print("'transcribed' table created successfully.")
+        else:
+            print("'transcribed' table already exists.")
+            # ensure url column exists for existing tables
+            cursor.execute('''
+                ALTER TABLE transcribed
+                ADD COLUMN IF NOT EXISTS url TEXT UNIQUE;
+            ''')
+        
+        # ensure foreign key constraint exists
         cursor.execute("""
-            select constraint_name from information_schema.table_constraints
-            where table_name='transcribed' and constraint_name='fk_downloaded_videos';
+            SELECT constraint_name FROM information_schema.table_constraints
+            WHERE table_name='transcribed' AND constraint_name='fk_downloaded_videos';
         """)
         if not cursor.fetchone():
+            print("adding foreign key constraint to 'transcribed' table...")
             cursor.execute('''
-                alter table transcribed
-                add constraint fk_downloaded_videos
-                foreign key (url) references downloaded_videos(url);
+                ALTER TABLE transcribed
+                ADD CONSTRAINT fk_downloaded_videos
+                FOREIGN KEY (url) REFERENCES downloaded_videos(url);
             ''')
+            print("foreign key constraint added successfully.")
+        else:
+            print("foreign key constraint already exists.")
+        
         conn.commit()
-        print("postgresql database initialized and tables (and columns) ensured.")
+        print("postgresql database initialization completed successfully.")
+        
+        # verify tables were created by checking again
+        if check_table_exists(cursor, 'downloaded_videos') and check_table_exists(cursor, 'transcribed'):
+            print("verification: all required tables are present and accessible.")
+        else:
+            print("warning: table verification failed - some tables may not be accessible.")
+            
     except psycopg2.Error as e:
-        print(f"Error initializing PostgreSQL database: {e}")
+        print(f"error initializing postgresql database: {e}")
         conn.rollback()
+        raise e  # re-raise to handle at higher level if needed
     finally:
         cursor.close()
         conn.close()
@@ -248,34 +363,23 @@ def update_download_status(url: str, status: str, local_path: Path | None = None
         conn.close()
 
 def insert_transcription_result(url: str, video_title: str, content: str):
-    """
-    inserts a transcription result into the transcribed table, linked to the downloaded video url.
-    """
+    """inserts the transcription result into the database."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    utc_time = datetime.utcnow().isoformat()
-    
-    # Get current UTC time
-    now_utc = datetime.now(ZoneInfo("UTC"))
-    
-    # Define the PST timezone
-    pst_timezone = pytz.timezone('America/Los_Angeles')
-    
-    # Convert UTC time to PST
-    pst_time_dt = now_utc.astimezone(pst_timezone)
-    
-    # Format PST time as MM/DD/YYYY HH:MM:SS AM/PM
-    pst_time = pst_time_dt.strftime('%m/%d/%Y %I:%M:%S %p')
-
+    now_utc = datetime.now(pytz.utc)
+    now_pst = now_utc.astimezone(ZoneInfo("America/Los_Angeles"))
+    utc_time_str = now_utc.strftime("%Y-%m-%d %H:%M:%S %Z")
+    pst_time_str = now_pst.strftime("%Y-%m-%d %H:%M:%S %Z")
+    print(f"DEBUG: Attempting to insert transcription for URL: {url}, Title: {video_title}") # added log
     try:
-        cursor.execute('''
-            INSERT INTO transcribed (utc_time, pst_time, url, video_title, content)
-            VALUES (%s, %s, %s, %s, %s)
-        ''', (utc_time, pst_time, url, video_title, content))
+        cursor.execute(
+            "insert into transcribed (utc_time, pst_time, url, video_title, content) values (%s, %s, %s, %s, %s) on conflict (url) do update set utc_time = excluded.utc_time, pst_time = excluded.pst_time, video_title = excluded.video_title, content = excluded.content",
+            (utc_time_str, pst_time_str, url, video_title, content)
+        )
         conn.commit()
-        print(f"Transcription for '{video_title}' (URL: {url}) saved to database.")
+        print(f"DEBUG: Successfully inserted/updated transcription for URL: {url}") # added log
     except psycopg2.Error as e:
-        print(f"Error inserting transcription result: {e}")
+        print(f"DEBUG: Error inserting/updating transcription for URL: {url}: {e}") # added log
         conn.rollback()
     finally:
         cursor.close()
@@ -283,57 +387,73 @@ def insert_transcription_result(url: str, video_title: str, content: str):
 
 def transcribe_files(model_name: str, downloaded_files_with_urls: list[tuple[Path, str]]) -> tuple[list[Path], list[str], dict[str, str]]:
     """
-    transcribes a list of audio files using the specified whisper model.
-    returns a tuple: (processed_originals_paths, failed_transcription_filenames, transcription_results_dict_url_text)
-    transcription_results_dict_url_text: maps original url to transcribed text
+    transcribes a list of downloaded audio files using the specified whisper model.
+
+    args:
+        model_name: the name of the whisper model to use (e.g., "base", "small", "medium").
+        downloaded_files_with_urls: a list of tuples, each containing the Path to a
+                                     downloaded audio file and its original url.
+
+    returns:
+        a tuple containing:
+            - successfully_transcribed_files: a list of Paths to successfully transcribed files.
+            - failed_transcription_files: a list of Paths to files that failed transcription.
+            - transcription_results: a dictionary mapping original urls to their transcription text.
     """
     global transcription_status
-    processed_originals_paths = []
-    failed_transcription_filenames = [] # these are path names, not urls
-    transcription_results_dict_url_text: Dict[str, str] = {}
+    print(f"DEBUG: transcribe_files called with model: {model_name}, files: {len(downloaded_files_with_urls)}")
+
+    successfully_transcribed_files: list[Path] = []
+    failed_transcription_files: list[str] = [] # stores urls that failed
+    transcription_results: dict[str, str] = {} # stores url -> transcription_text
 
     if not downloaded_files_with_urls:
-        print("No audio files provided for transcription.")
-        return [], [], {}
+        print("DEBUG: No files to transcribe.")
+        return successfully_transcribed_files, failed_transcription_files, transcription_results
 
-    print(f"\nLoading Whisper model '{model_name}'... (This might take a while the first time)")
     try:
-        model = whisper.load_model(model_name)
-        print(f"Model '{model_name}' loaded successfully.")
-    except Exception as e:
-        print(f"Error loading Whisper model '{model_name}': {e}")
-        print("Please ensure the model name is correct and you have enough resources.")
-        print("You might also need to install Rust if tiktoken doesn't have a pre-built wheel for your system.")
-        return [], [], {}
-
-    print(f"\nFound {len(downloaded_files_with_urls)} audio file(s) to transcribe.")
-
-    total_files = len(downloaded_files_with_urls)
-    transcribed_count = 0
-    # update status for the api
-    transcription_status["progress"] = f"{transcribed_count}/{total_files}"
-
-    for audio_file_path, url in downloaded_files_with_urls:
-        print(f"\nProcessing '{audio_file_path.name}' ({transcribed_count + 1}/{total_files})...")
-
-        try:
-            result = model.transcribe(str(audio_file_path), fp16=False)
-            transcription = result["text"]
-            transcription_results_dict_url_text[url] = transcription # use url as key
-            processed_originals_paths.append(audio_file_path)
-            print(f"  Successfully transcribed '{audio_file_path.name}'.")
-            
-            # Extract video title from audio_file_path.name (remove extension)
-            video_title = audio_file_path.stem
-            # insert_transcription_result(url, video_title, transcription) # moved to main pipeline
-        except Exception as e:
-            print(f"  Error transcribing '{audio_file_path.name}': {e}")
-            failed_transcription_filenames.append(audio_file_path.name)
+        # check if the model name is valid, otherwise default to "base"
+        valid_models = whisper.available_models()
+        if model_name not in valid_models:
+            print(f"Warning: Whisper model \'{model_name}\' not found. defaulting to \'base\'. available models: {valid_models}")
+            model_name = "base"
         
-        transcribed_count += 1
-        transcription_status["progress"] = f"{transcribed_count}/{total_files}"
+        model = whisper.load_model(model_name)
+        print(f"DEBUG: Whisper model \'{model_name}\' loaded.")
 
-    return processed_originals_paths, failed_transcription_filenames, transcription_results_dict_url_text
+        for audio_file_path, original_url in downloaded_files_with_urls:
+            try:
+                print(f"DEBUG: Starting transcription for {audio_file_path} (URL: {original_url})")
+                transcription_result = model.transcribe(str(audio_file_path))
+                # verify whisper's output directly
+                print(f"DEBUG: Whisper output for {audio_file_path} (URL: {original_url}): {transcription_result}")
+
+                text = transcription_result["text"] # type: ignore
+                transcription_results[original_url] = text
+                successfully_transcribed_files.append(audio_file_path)
+                print(f"DEBUG: Successfully transcribed {audio_file_path}")
+            except Exception as e:
+                print(f"DEBUG: Error during transcription of {audio_file_path} (URL: {original_url}): {e}")
+                failed_transcription_files.append(original_url) # add url to failed list
+                # also update the main status
+                if original_url not in transcription_status["failed_urls"]:
+                    transcription_status["failed_urls"].append(original_url)
+                    print(f"DEBUG: Added {original_url} to global failed_urls. Current failed_urls: {transcription_status['failed_urls']}")
+
+
+    except Exception as e:
+        print(f"DEBUG: General error in transcribe_files: {e}")
+        # if a general error occurs (e.g., model loading), mark all as failed
+        for _, original_url in downloaded_files_with_urls:
+            if original_url not in failed_transcription_files: # ensure not already added
+                 failed_transcription_files.append(original_url)
+            if original_url not in transcription_status["failed_urls"]:
+                 transcription_status["failed_urls"].append(original_url)
+                 print(f"DEBUG: Added {original_url} to global failed_urls due to general error. Current failed_urls: {transcription_status['failed_urls']}")
+
+
+    print(f"DEBUG: transcribe_files completed. Success: {len(successfully_transcribed_files)}, Fail: {len(failed_transcription_files)}")
+    return successfully_transcribed_files, failed_transcription_files, transcription_results
 
 def download_youtube_videos(youtube_urls: list[str], output_dir: Path) -> tuple[list[tuple[Path, str]], list[str], list[str]]:
     """
@@ -509,143 +629,170 @@ def cleanup_tmp_dir(tmp_dir: Path):
 
 def run_transcription_pipeline():
     """
-    main function to run the transcription pipeline.
-    reads urls from list_file, downloads, transcribes, and saves to db.
-    updates global transcription_status.
+    main pipeline to download, transcribe, and manage video/audio processing.
+    this function is intended to be run in a background thread.
     """
     global transcription_status
-    print("starting transcription pipeline run...")
-    print(f"DEBUG: run_transcription_pipeline started. Current status: {transcription_status}")
-    # initial status set by /trigger_transcription, this function updates it through phases
+    print(f"DEBUG: run_transcription_pipeline started. Initial status: {transcription_status}")
 
-    # ensure tmp directory exists
-    TMP_DIR.mkdir(parents=True, exist_ok=True)
-    # initialize database
-    initialize_db()
+    # ensure database and tables exist before processing
+    try:
+        print("DEBUG: run_transcription_pipeline - Ensuring database and tables exist...")
+        initialize_db()
+        print("DEBUG: run_transcription_pipeline - Database initialization completed.")
+    except Exception as e:
+        print(f"DEBUG: run_transcription_pipeline - Database initialization failed: {e}")
+        transcription_status["status"] = "error"
+        transcription_status["progress"] = "0/0"
+        return
 
-    # read urls from list.txt
+    if not TMP_DIR.exists():
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
+        print(f"DEBUG: Created TMP_DIR: {TMP_DIR}")
+
     if not LIST_FILE.exists() or LIST_FILE.stat().st_size == 0:
-        print(f"'{LIST_FILE}' is empty or does not exist. nothing to process.")
-        transcription_status = get_initial_transcription_status()
-        print(f"DEBUG: list.txt empty/not found. Status reset to: {transcription_status}")
-        return
-
-    with open(LIST_FILE, "r") as f:
-        youtube_urls = [line.strip() for line in f if line.strip()]
-
-    if not youtube_urls:
-        print("no urls found in list.txt after stripping empty lines.")
-        transcription_status = get_initial_transcription_status()
-        print(f"DEBUG: No URLs after stripping. Status reset to: {transcription_status}")
-        return
-        
-    total_urls = len(youtube_urls)
-    print(f"found {total_urls} url(s) in '{LIST_FILE}'.")
-    transcription_status.update({"status": "processing", "progress": f"0/{total_urls}", "processed_videos": [], "failed_urls": []})
-    print(f"DEBUG: Status updated to 'processing': {transcription_status}")
-
-    # download videos
-    model_name = os.getenv("WHISPER_MODEL", "base.en")
-    
-    downloaded_files_with_urls, failed_download_urls, _ = download_youtube_videos(youtube_urls, TMP_DIR)
-    transcription_status["failed_urls"].extend(failed_download_urls) # accumulate failed urls
-
-    # filter out files that failed to download before transcription
-    valid_files_for_transcription = [item for item in downloaded_files_with_urls if item[0].exists() and item[1] not in failed_download_urls]
-
-    if not valid_files_for_transcription:
-        print("no files were successfully downloaded or found in a valid state for transcription.")
+        transcription_status.update({"status": "idle", "progress": "0/0"})
+        print(f"DEBUG: run_transcription_pipeline - list.txt is empty or doesn't exist. Status set to idle.")
         cleanup_tmp_dir(TMP_DIR)
-        # update status to reflect only download failures if that's the case
-        processed_count = len(youtube_urls) - len(transcription_status["failed_urls"])
-        transcription_status.update({
-            "status": "completed_with_errors", 
-            "progress": f"{processed_count}/{total_urls} processed (downloads attempted)",
-            "details": f"{len(transcription_status['failed_urls'])}/{total_urls} failed to download or locate file."
-        })
-        # processed_videos remains empty
         return
 
-    # transcribe downloaded files
-    transcription_status["status"] = "transcribing"
-    print(f"DEBUG: Status updated to 'transcribing': {transcription_status}")
-    # progress for transcription will be updated by transcribe_files based on valid_files_for_transcription count
-    
-    _, failed_transcription_paths, transcription_results_dict = transcribe_files(model_name, valid_files_for_transcription)
+    transcription_status["status"] = "processing_downloads"
+    print(f"DEBUG: run_transcription_pipeline - Status set to 'processing_downloads'. Reading URLs from {LIST_FILE}")
 
-    # map failed transcription paths back to urls if possible, for reporting
-    # this is a bit tricky as transcribe_files returns paths, not urls directly for failures
-    # for simplicity, we'll count them. detailed url mapping for transcription failures needs more work.
-    
-    # save results to database and collect titles
-    saved_to_db_count = 0
-    successfully_processed_videos_info: List[Dict[str, str]] = []
+    try:
+        with open(LIST_FILE, "r") as f:
+            all_urls_from_file = [url.strip() for url in f if url.strip()]
 
-    for url, text_content in transcription_results_dict.items():
-        # get video title - try from local path stem first (which download_youtube_videos might have named well)
-        # then fall back to a generic one if needed.
-        path_for_url = next((p for p, u_item in valid_files_for_transcription if u_item == url), None)
-        video_title = "unknown_title"
-        if path_for_url:
-            raw_title = path_for_url.stem
-            # crude way to remove common yt-dlp id patterns if they are at the end
-            video_title = re.sub(r'\s*\[[\w-]{11}\]$|\s*\[[\w-]{10}\]$|\s*_[\w-]{11}$|\s*_[\w-]{10}$', '', raw_title).strip()
-            if not video_title : video_title = raw_title # if regex made it empty, use original stem
-        else: # fallback if path not found (should not happen if url in transcription_results_dict)
-            video_title = get_video_title_from_db(url) if get_video_title_from_db(url) else f"title_for_{url[:20]}"
+        if not all_urls_from_file:
+            transcription_status.update({"status": "completed", "progress": "0/0"})
+            print(f"DEBUG: run_transcription_pipeline - No URLs found in list.txt after stripping. Status set to completed.")
+            cleanup_tmp_dir(TMP_DIR)
+            return
 
-        insert_transcription_result(url, video_title, text_content) # db save happens here
-        successfully_processed_videos_info.append({"url": url, "title": video_title})
-        saved_to_db_count +=1
-    
-    transcription_status["processed_videos"] = successfully_processed_videos_info
-    
-    # update failed_urls with those that failed transcription
-    # this requires mapping failed_transcription_paths back to their original urls
-    # for now, let's assume a transcription failure for a url means it's not in successfully_processed_videos_info
-    all_attempted_transcription_urls = {url for _, url in valid_files_for_transcription}
-    successful_transcription_urls = {info["url"] for info in successfully_processed_videos_info}
-    transcription_failure_urls = list(all_attempted_transcription_urls - successful_transcription_urls)
-    transcription_status["failed_urls"].extend(tf_url for tf_url in transcription_failure_urls if tf_url not in transcription_status["failed_urls"])
+        print(f"DEBUG: run_transcription_pipeline - Found {len(all_urls_from_file)} URLs to process: {all_urls_from_file}")
 
-    print(f"\n--- pipeline run summary ---")
-    print(f"{len(youtube_urls)} url(s) initially provided from list.txt.")
-    print(f"{len(downloaded_files_with_urls) - len(failed_download_urls)} video(s) likely downloaded successfully.")
-    print(f"{len(failed_download_urls)} video(s) failed during download/file location phase.")
-    print(f"{len(valid_files_for_transcription)} video(s) submitted for transcription.")
-    print(f"{saved_to_db_count} video(s) transcribed and saved to database.")
-    
-    num_transcription_failures = len(valid_files_for_transcription) - saved_to_db_count
-    print(f"{num_transcription_failures} video(s) may have failed during transcription phase.")
-    
-    # cleanup
-    cleanup_tmp_dir(TMP_DIR)
-    print("temporary files cleaned up.")
-    
-    final_successful_count = saved_to_db_count
-    
-    if final_successful_count == total_urls:
-        transcription_status.update({
-            "status": "completed", 
-            "progress": f"{final_successful_count}/{total_urls}"
-            # processed_videos and failed_urls already set
-        })
-        print("transcription pipeline completed successfully for all urls.")
-    else:
-        transcription_status.update({
-            "status": "completed_with_errors", 
-            "progress": f"{final_successful_count}/{total_urls} transcribed and saved",
-            "details": f"{total_urls - final_successful_count} url(s) failed at some stage."
-            # processed_videos and failed_urls already set
-        })
-        print("transcription pipeline completed with some errors.")
-        print(f"successfully processed and saved: {final_successful_count}")
-        print(f"failed urls accumulated: {len(transcription_status['failed_urls'])}")
-        for failed_url_item in transcription_status['failed_urls']:
-            print(f"  - {failed_url_item}")
+        # reset progress and lists for this run, but keep status as "processing_downloads"
+        transcription_status["progress"] = f"0/{len(all_urls_from_file)}"
+        transcription_status["processed_videos"] = []
+        transcription_status["failed_urls"] = []
+        processed_video_count = 0
 
-    # n8n should call /clear_list after verifying db state and getting this completion message.
-    # we don't clear list.txt automatically here.
+        # --- step 1: check existing and download new videos ---
+        urls_to_download: list[str] = []
+        downloaded_files_for_transcription_check: list[tuple[Path, str]] = [] # path, url
+
+        for url in all_urls_from_file:
+            db_status, local_path_str, yt_dlp_processed = get_download_status(url)
+            print(f"DEBUG: run_transcription_pipeline - DB status for {url}: Status='{db_status}', Path='{local_path_str}', Processed='{yt_dlp_processed}'")
+            
+            if db_status == "downloaded" and local_path_str and Path(local_path_str).exists() and yt_dlp_processed:
+                print(f"DEBUG: run_transcription_pipeline - URL {url} already processed by yt-dlp and file exists. Adding to transcription check list.")
+                downloaded_files_for_transcription_check.append((Path(local_path_str), url))
+                # if it was previously marked as failed for other reasons, remove it now as we might re-process it successfully.
+                if url in transcription_status["failed_urls"]:
+                    transcription_status["failed_urls"].remove(url)
+                    print(f"DEBUG: run_transcription_pipeline - Removed {url} from failed_urls as it is being re-checked for transcription.")
+            elif db_status == "downloaded" and local_path_str and not Path(local_path_str).exists():
+                print(f"DEBUG: run_transcription_pipeline - URL {url} status is 'downloaded' but file {local_path_str} missing. Queuing for re-download.")
+                urls_to_download.append(url)
+            elif db_status == "failed_download":
+                print(f"DEBUG: run_transcription_pipeline - URL {url} previously failed download. Adding to failed_urls and skipping.")
+                if url not in transcription_status["failed_urls"]:
+                    transcription_status["failed_urls"].append(url)
+            else: # not downloaded, or status unknown, or not yt_dlp_processed
+                print(f"DEBUG: run_transcription_pipeline - URL {url} not processed or needs download. Adding to download queue.")
+                urls_to_download.append(url)
+
+        downloaded_files_with_urls: list[tuple[Path, str]] = [] # path, url
+        failed_download_urls: list[str] = []
+
+        if urls_to_download:
+            print(f"DEBUG: run_transcription_pipeline - Attempting to download {len(urls_to_download)} URLs.")
+            # download_youtube_videos updates db status internally now
+            # it returns: (successfully_downloaded_files_with_urls, failed_to_download_urls, already_downloaded_urls)
+            successful_downloads, failed_downloads, _ = download_youtube_videos(urls_to_download, TMP_DIR)
+            downloaded_files_with_urls.extend(successful_downloads)
+            failed_download_urls.extend(failed_downloads)
+            print(f"DEBUG: run_transcription_pipeline - Download results: Success: {len(successful_downloads)}, Failed: {len(failed_downloads)}")
+        
+        # combine files that were already downloaded with newly downloaded ones for transcription
+        downloaded_files_with_urls.extend(downloaded_files_for_transcription_check)
+        # ensure uniqueness in case a file was in both lists (e.g., re-queued after failed check)
+        downloaded_files_with_urls = list(dict.fromkeys(downloaded_files_with_urls)) # maintains order, faster for larger lists
+        print(f"DEBUG: run_transcription_pipeline - Total files ready for transcription check: {len(downloaded_files_with_urls)}")
+
+
+        # update status with progress and any failures during download
+        total_videos = len(all_urls_from_file)
+        
+        transcription_status["progress"] = f"{processed_video_count}/{total_videos}" # this will be updated more accurately later
+        # add download failures, ensuring no duplicates
+        for fud_url in failed_download_urls:
+            if fud_url not in transcription_status["failed_urls"]:
+                transcription_status["failed_urls"].append(fud_url)
+        print(f"DEBUG: run_transcription_pipeline - After download phase. Initial Processed (before transcription): {processed_video_count}, Total: {total_videos}, Failed URLs so far: {transcription_status['failed_urls']}")
+
+
+        # --- step 3: transcribe downloaded files ---
+        transcription_status["status"] = "processing_transcriptions"
+        print(f"DEBUG: run_transcription_pipeline - Status set to 'processing_transcriptions'.")
+        transcription_results_dict: Dict[str, str] = {}
+
+        if downloaded_files_with_urls:
+            model_name = os.getenv("WHISPER_MODEL", "base")
+            print(f"DEBUG: run_transcription_pipeline - Starting transcription with model: {model_name} for {len(downloaded_files_with_urls)} files.")
+            # transcribe_files returns: (successfully_transcribed_files_paths, failed_transcription_original_urls, transcription_results_dict_url_text)
+            _, failed_transcription_original_urls, transcription_results_dict = transcribe_files(model_name, downloaded_files_with_urls)
+            
+            # add transcription failures, ensuring no duplicates
+            for ftu_url in failed_transcription_original_urls:
+                if ftu_url not in transcription_status["failed_urls"]:
+                    transcription_status["failed_urls"].append(ftu_url)
+            print(f"DEBUG: run_transcription_pipeline - After transcription. Transcription results count: {len(transcription_results_dict)}, Failed URLs now: {transcription_status['failed_urls']}")
+
+
+            # --- step 4: save successful transcriptions to database ---
+            print(f"DEBUG: run_transcription_pipeline - Saving {len(transcription_results_dict)} transcriptions to DB.")
+            for original_url, text_content in transcription_results_dict.items():
+                # only proceed if this url didn't end up in the failed list during transcription
+                if original_url in transcription_status["failed_urls"]:
+                    print(f"DEBUG: run_transcription_pipeline - Skipping DB insert for {original_url} as it was marked failed.")
+                    continue
+
+                video_title = get_video_title_from_db(original_url) or "unknown title"
+                insert_transcription_result(original_url, video_title, text_content)
+                
+                # update processed_videos if not already there (should reflect true successes)
+                is_already_processed = any(pv['url'] == original_url for pv in transcription_status["processed_videos"])
+                if not is_already_processed:
+                    transcription_status["processed_videos"].append({"url": original_url, "title": video_title})
+                    print(f"DEBUG: Added {original_url} (Title: {video_title}) to processed_videos. Current count: {len(transcription_status['processed_videos'])}")
+                
+        # --- step 5: final status update ---
+        successful_processed_videos = [pv for pv in transcription_status["processed_videos"] if pv['url'] not in transcription_status["failed_urls"]]
+        if len(successful_processed_videos) != len(transcription_status["processed_videos"]):
+            print(f"DEBUG: Correcting processed_videos. Before: {len(transcription_status['processed_videos'])}, After: {len(successful_processed_videos)}")
+            transcription_status["processed_videos"] = successful_processed_videos
+        
+        actual_processed_count = len(transcription_status["processed_videos"])
+        transcription_status["progress"] = f"{actual_processed_count}/{total_videos}"
+        print(f"DEBUG: run_transcription_pipeline - Final progress update: {transcription_status['progress']}. Total processed_videos: {actual_processed_count}")
+
+        if not transcription_status["failed_urls"]:
+            transcription_status["status"] = "completed"
+            print("DEBUG: run_transcription_pipeline - Status set to 'completed'. No failed URLs.")
+        else:
+            transcription_status["status"] = "completed_with_errors"
+            print(f"DEBUG: run_transcription_pipeline - Status set to 'completed_with_errors'. Failed URLs ({len(transcription_status['failed_urls'])}): {transcription_status['failed_urls']}")
+        
+        print(f"DEBUG: Final processed_videos list: {transcription_status['processed_videos']}")
+        print(f"DEBUG: Final failed_urls list: {transcription_status['failed_urls']}")
+
+    except Exception as e:
+        transcription_status["status"] = "error"
+        print(f"CRITICAL ERROR in run_transcription_pipeline: {e}") # added for better error logging
+        # optionally re-raise or handle more gracefully depending on desired behavior for background tasks
+        # for now, it just logs and sets status to "error"
 
 # --- main execution (when script is run directly) ---
 def main(): # main is now for direct script execution if needed, or can be removed.
