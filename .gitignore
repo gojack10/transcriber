@@ -9,4 +9,4 @@ whisper-cache
 !.gitignore
 !requirements-dev.txt
 !requirements.txt
-
+custom_videos/

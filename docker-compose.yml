@@ -20,9 +20,10 @@ services:
       # if your app needs timezone data, uncomment and set appropriately
       # - TZ=america/los_angeles
     volumes:
-      - ./list.txt:/app/list.txt   # maps your local list.txt to the one in the container
-      - ./tmp:/app/tmp             # maps your local tmp folder
-      - ./whisper-cache:/root/.cache/whisper # persists whisper models to ./whisper-cache on your host
+      - ./video_queue.json:/app/video_queue.json   # maps your local queue file to the one in the container
+      - ./custom_videos:/app/custom_videos         # maps your local custom videos folder
+      - ./tmp:/app/tmp                             # maps your local tmp folder
+      - ./whisper-cache:/root/.cache/whisper      # persists whisper models to ./whisper-cache on your host
     deploy:
       resources:
         reservations:

@@ -1,7 +1,7 @@
 # use an nvidia cuda runtime as a parent image
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
-# set environment variables
+# set environment variables (fixing legacy format warnings)
 ENV DB_HOST="host.docker.internal"
 ENV DB_PORT="5432"
 ENV DB_NAME="transcriber_db"
@@ -9,28 +9,37 @@ ENV DB_USER="gojack10"
 ENV DB_PASSWORD="moso10"
 ENV WHISPER_MODEL="base.en"
 ENV PYTHONUNBUFFERED=1
-# nvidia container toolkit environment variables
-ENV NVIDIA_VISIBLE_DEVICES all
-ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
-ENV LANG C.UTF-8
-ENV LC_ALL C.UTF-8
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
 
 # set the working directory in the container
 WORKDIR /app
 
-# install python 3.10 and other dependencies
-RUN apt-get update && \
+# Configure apt to use different mirrors and fix network issues
+RUN echo "deb http://mirrors.kernel.org/ubuntu jammy main restricted universe multiverse" > /etc/apt/sources.list && \
+    echo "deb http://mirrors.kernel.org/ubuntu jammy-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.kernel.org/ubuntu jammy-security main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.kernel.org/ubuntu jammy-backports main restricted universe multiverse" >> /etc/apt/sources.list
+
+# install python and other dependencies (Ubuntu 22.04 comes with Python 3.10 by default)
+RUN apt-get update --fix-missing && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    python3.10 \
+    python3 \
     python3-pip \
-    python3.10-venv \
+    python3-venv \
+    python3-dev \
     ffmpeg \
     git \
     tzdata \
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# link python3 to python3.10
-RUN ln -sf /usr/bin/python3.10 /usr/bin/python3 && \
+# create symbolic links for python
+RUN ln -sf /usr/bin/python3 /usr/bin/python && \
     ln -sf /usr/bin/pip3 /usr/bin/pip
 
 # copy the dependencies file to the working directory

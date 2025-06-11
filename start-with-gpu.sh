@@ -37,12 +37,13 @@ docker run -d \
   -e DB_PASSWORD=moso10 \
   -e WHISPER_MODEL=turbo \
   -e PYTHONUNBUFFERED=1 \
-  -v $(pwd)/list.txt:/app/list.txt \
+  -v $(pwd)/video_queue.json:/app/video_queue.json \
+  -v $(pwd)/custom_videos:/app/custom_videos \
   -v $(pwd)/tmp:/app/tmp \
   -v $(pwd)/whisper-cache:/root/.cache/whisper \
   -p 8000:8000 \
   --network transcriber_app_network \
-  transcription_test
+  transcription-service
 
 echo "services started successfully!"
 echo "transcription service: http://localhost:8000"

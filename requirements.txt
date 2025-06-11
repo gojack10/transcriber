@@ -4,3 +4,4 @@ pydantic
 openai-whisper
 pytz
 psycopg2-binary
+python-multipart
