@@ -4,6 +4,9 @@
 echo "creating docker network..."
 docker network create transcriber_app_network 2>/dev/null || true
 
+# ensure the queue file exists as a regular file
+[ -f video_queue.json ] || echo "[]" > video_queue.json
+
 # start transcription service with GPU support
 # first, start the database
 echo "starting postgres database..."
