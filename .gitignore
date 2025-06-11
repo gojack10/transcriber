@@ -10,3 +10,4 @@ whisper-cache
 !requirements-dev.txt
 !requirements.txt
 custom_videos/
+video_queue.json
