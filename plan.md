@@ -18,7 +18,7 @@ The goal is to test the application's logic (queue management, status updates, d
 
 These tests verify the entire pipeline flow from a user's perspective, using the mocked components.
 
-1.  **Successful YouTube Video Workflow**
+- [x]  **Successful YouTube Video Workflow**
     *   **Goal**: Test the "happy path" for a YouTube URL.
     *   **Steps**:
         1.  Start with an empty queue/database.
@@ -32,7 +32,7 @@ These tests verify the entire pipeline flow from a user's perspective, using the
         9.  Assert that `GET /transcribed_content_full/{id}` returns the mock transcription text.
         10. Assert that the temporary downloaded file was deleted.
 
-2.  **Successful Custom Video Workflow**
+- [x]  **Successful Custom Video Workflow**
     *   **Goal**: Test the "happy path" for an uploaded file.
     *   **Steps**:
         1.  Start with an empty queue/database.
@@ -115,12 +115,12 @@ These tests focus on the logic and error handling of individual endpoints.
 
 These tests would be separate from the main regression suite. They could be tagged (e.g., `@pytest.mark.gpu`, `@pytest.mark.network`) and run selectively on machines with the necessary hardware and network access.
 
-1.  **Whisper Model Test (`transcribe_files`)**
+- [ ]  **Whisper Model Test (`transcribe_files`)**
     *   **Goal**: Verify that `transcribe_files` can correctly load a model and produce text.
     *   **Setup**: Have a very short (2-5 seconds) sample audio file with known, simple speech (e.g., "The quick brown fox jumps over the lazy dog.") checked into your repository.
     *   **Test**:
         1.  Run the *real* `transcribe_files` function (not the mock).
-        2.  Use the smallest possible model, like `tiny.en` or `base.en`, to speed up the test.
+        2.  Use the smallest possible model, `tiny.en` (not the default turbo)
         3.  Pass the path to your sample audio file.
         4.  Assert that the returned transcription text closely matches the known text. This doesn't need to be a perfect match, but it should be substantially correct.
         5.  This test validates your Python environment, `ffmpeg` installation, and PyTorch/CUDA setup.
