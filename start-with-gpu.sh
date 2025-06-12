@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Source .env file if it exists
+if [ -f .env ]; then
+  export $(grep -v '^#' .env | xargs)
+fi
+
 # create network if it doesn't exist
 echo "creating docker network..."
 docker network create transcriber_app_network 2>/dev/null || true
@@ -13,9 +18,9 @@ echo "starting postgres database..."
 docker run -d \
   --name transcriber-db \
   --restart unless-stopped \
-  -e POSTGRES_USER=gojack10 \
-  -e POSTGRES_PASSWORD=moso10 \
-  -e POSTGRES_DB=transcriber_db \
+  -e POSTGRES_USER=${DB_USER} \
+  -e POSTGRES_PASSWORD=${DB_PASSWORD} \
+  -e POSTGRES_DB=${DB_NAME} \
   -e PGDATA=/var/lib/postgresql/data/pgdata \
   -v /mnt/massstorage/transcription-db:/var/lib/postgresql/data/pgdata \
   -p 5432:5432 \
@@ -35,10 +40,10 @@ docker run -d \
   -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
   -e DB_HOST=transcriber-db \
   -e DB_PORT=5432 \
-  -e DB_NAME=transcriber_db \
-  -e DB_USER=gojack10 \
-  -e DB_PASSWORD=moso10 \
-  -e WHISPER_MODEL=turbo \
+  -e DB_NAME=${DB_NAME} \
+  -e DB_USER=${DB_USER} \
+  -e DB_PASSWORD=${DB_PASSWORD} \
+  -e WHISPER_MODEL=${WHISPER_MODEL} \
   -e PYTHONUNBUFFERED=1 \
   -v $(pwd)/video_queue.json:/app/video_queue.json \
   -v $(pwd)/custom_videos:/app/custom_videos \

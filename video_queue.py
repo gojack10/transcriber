@@ -211,27 +211,4 @@ class VideoProcessingQueue:
     def is_processing(self) -> bool:
         """Check if currently processing an item"""
         with self.lock:
-            return self.processing_item is not None
-    
-    def migrate_from_list_file(self, list_file: Path) -> int:
-        """Migrate URLs from the old list.txt format"""
-        if not list_file.exists():
-            return 0
-            
-        with self.lock:
-            count = 0
-            try:
-                with open(list_file, 'r') as f:
-                    for line in f:
-                        url = line.strip()
-                        if url and not self._is_url_in_queue(url):
-                            if url.startswith("custom://"):
-                                item = VideoQueueItem(url, VideoType.CUSTOM)
-                            else:
-                                item = VideoQueueItem(url, VideoType.YOUTUBE)
-                            self.queue.append(item)
-                            count += 1
-                self._save_queue()
-            except Exception as e:
-                print(f"Error migrating from list file: {e}")
-            return count 
+            return self.processing_item is not None 

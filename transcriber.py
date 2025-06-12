@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-import psycopg2
 import pytz
 import uvicorn
 import whisper
 from fastapi import (
     BackgroundTasks,
     Body,
+    Depends,
     FastAPI,
     File,
     Form,
@@ -27,6 +27,19 @@ from fastapi import (
 from fastapi import status as fastapi_status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import (
+    Boolean,
+    Column,
+    create_engine,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
 
 # Import our new queue module
 from video_queue import VideoProcessingQueue, VideoStatus, VideoType
@@ -63,7 +76,6 @@ BASE_DIR = Path(__file__).resolve().parent
 TMP_DIR = BASE_DIR / "tmp"
 QUEUE_FILE = BASE_DIR / "video_queue.json"
 CUSTOM_VIDEOS_DIR = BASE_DIR / "custom_videos"
-OLD_LIST_FILE = BASE_DIR / "list.txt"  # Keep for migration purposes
 
 # supported audio file extensions (add more if needed)
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".wma"}
@@ -99,10 +111,20 @@ def update_status_from_queue():
     global transcription_status
     queue_status = video_queue.get_status()
 
-    # Map queue status to old status format
+    # if the queue is idle, it means no processing is happening.
+    # in this case, we should not overwrite a 'completed' or 'completed_with_errors' status
+    # from the previous run. that status is the final report of the pipeline and should
+    # be preserved until a new job is explicitly triggered (which resets the status).
+    if queue_status["status"] == "idle" and transcription_status["status"] in [
+        "completed",
+        "completed_with_errors",
+    ]:
+        return
+
+    # map queue status to old status format
     transcription_status["status"] = queue_status["status"]
 
-    # Calculate progress
+    # calculate progress
     total = queue_status["total_items"]
     if queue_status["processing_item"]:
         if queue_status["processing_item"]["status"] == "completed":
@@ -118,21 +140,39 @@ def update_status_from_queue():
     # In a full implementation, we'd track completed/failed items separately
 
 
+# --- sqlalchemy setup ---
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./transcriber.db")
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
+)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+
+# --- sqlalchemy models ---
+class DownloadedVideo(Base):
+    __tablename__ = "downloaded_videos"
+    id = Column(Integer, primary_key=True, index=True)
+    url = Column(String, unique=True, index=True)
+    status = Column(String, nullable=False)
+    download_date = Column(DateTime, nullable=False)
+    local_path = Column(String)
+    yt_dlp_processed = Column(Boolean, default=False)
+
+
+class Transcribed(Base):
+    __tablename__ = "transcribed"
+    id = Column(Integer, primary_key=True, index=True)
+    utc_time = Column(DateTime, nullable=False)
+    pst_time = Column(DateTime, nullable=False)
+    url = Column(String, unique=True, index=True)
+    video_title = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+
+
 def create_app() -> FastAPI:
     global transcription_status, video_queue
-
-    # Migrate from old list.txt if it exists
-    if OLD_LIST_FILE.exists() and OLD_LIST_FILE.stat().st_size > 0:
-        print(f"DEBUG: Migrating from old list.txt file...")
-        migrated_count = video_queue.migrate_from_list_file(OLD_LIST_FILE)
-        if migrated_count > 0:
-            print(f"DEBUG: Migrated {migrated_count} URLs from list.txt")
-            # Clear the old file after successful migration
-            try:
-                OLD_LIST_FILE.write_text("")
-                print(f"DEBUG: Cleared old list.txt file")
-            except Exception as e:
-                print(f"DEBUG: Error clearing old list.txt: {e}")
 
     _app = FastAPI()
 
@@ -406,113 +446,94 @@ def create_app() -> FastAPI:
         return response
 
     @_app.get("/transcribed_videos")
-    async def get_transcribed_videos():
+    async def get_transcribed_videos(db: Session = Depends(get_db_connection)):
         """retrieves a list of all transcribed videos from the database."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
         try:
-            cursor.execute("SELECT id, url, video_title FROM transcribed ORDER BY id")
-            results = cursor.fetchall()
+            results = db.query(Transcribed).order_by(Transcribed.id).all()
             videos = [
-                {"id": row[0], "url": row[1], "video_title": row[2]} for row in results
+                {"id": row.id, "url": row.url, "video_title": row.video_title}
+                for row in results
             ]
             return {"videos": videos}
-        except psycopg2.Error as e:
+        except Exception as e:
             raise HTTPException(
                 status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"database error: {e}",
             )
-        finally:
-            cursor.close()
-            conn.close()
 
     @_app.get("/transcribed_content_summary/{id_or_url}")
-    async def get_transcribed_content_summary(id_or_url: str):
+    async def get_transcribed_content_summary(
+        id_or_url: str, db: Session = Depends(get_db_connection)
+    ):
         """retrieves a summary (first 100 words) of transcribed content by id or url."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
         try:
-            # try to parse as integer id first
+            result = None
             try:
                 video_id = int(id_or_url)
-                cursor.execute(
-                    "SELECT id, url, content FROM transcribed WHERE id = %s",
-                    (video_id,),
+                result = (
+                    db.query(Transcribed).filter(Transcribed.id == video_id).first()
                 )
             except ValueError:
-                # treat as url
                 decoded_url = urllib.parse.unquote(id_or_url)
-                cursor.execute(
-                    "SELECT id, url, content FROM transcribed WHERE url = %s",
-                    (decoded_url,),
+                result = (
+                    db.query(Transcribed).filter(Transcribed.url == decoded_url).first()
                 )
 
-            result = cursor.fetchone()
             if not result:
                 raise HTTPException(
                     status_code=fastapi_status.HTTP_404_NOT_FOUND,
                     detail="transcription content not found for this id/url.",
                 )
 
-            video_id, url, content = result
             # create summary (first 100 words approximately)
-            words = content.split()
+            words = result.content.split()
             summary_words = words[:100]
             summary = " ".join(summary_words)
             if len(words) > 100:
                 summary += "..."
 
-            return {"id": video_id, "url": url, "summary": summary}
-        except psycopg2.Error as e:
+            return {"id": result.id, "url": result.url, "summary": summary}
+        except Exception as e:
             raise HTTPException(
                 status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"database error: {e}",
             )
-        finally:
-            cursor.close()
-            conn.close()
 
     @_app.get("/transcribed_content_full/{id_or_url}")
-    async def get_transcribed_content_full(id_or_url: str):
+    async def get_transcribed_content_full(
+        id_or_url: str, db: Session = Depends(get_db_connection)
+    ):
         """retrieves the full transcribed content by id or url."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
         try:
-            # try to parse as integer id first
+            result = None
             try:
                 video_id = int(id_or_url)
-                cursor.execute(
-                    "SELECT id, url, content FROM transcribed WHERE id = %s",
-                    (video_id,),
+                result = (
+                    db.query(Transcribed).filter(Transcribed.id == video_id).first()
                 )
             except ValueError:
-                # treat as url
                 decoded_url = urllib.parse.unquote(id_or_url)
-                cursor.execute(
-                    "SELECT id, url, content FROM transcribed WHERE url = %s",
-                    (decoded_url,),
+                result = (
+                    db.query(Transcribed).filter(Transcribed.url == decoded_url).first()
                 )
 
-            result = cursor.fetchone()
             if not result:
                 raise HTTPException(
                     status_code=fastapi_status.HTTP_404_NOT_FOUND,
                     detail="transcription content not found for this id/url.",
                 )
 
-            video_id, url, content = result
-            return {"id": video_id, "url": url, "content": content}
-        except psycopg2.Error as e:
+            return {"id": result.id, "url": result.url, "content": result.content}
+        except Exception as e:
             raise HTTPException(
                 status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"database error: {e}",
             )
-        finally:
-            cursor.close()
-            conn.close()
 
     @_app.post("/export_transcription")
-    async def export_transcription(payload: dict = Body(...)):
+    async def export_transcription(
+        payload: dict = Body(...), db: Session = Depends(get_db_connection)
+    ):
         """exports transcription content to a text file."""
         video_id_or_url = payload.get("id")
         if not video_id_or_url:
@@ -521,24 +542,22 @@ def create_app() -> FastAPI:
                 detail="id field is required",
             )
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
         try:
             # try to parse as integer id first
+            result = None
             try:
                 video_id = int(video_id_or_url)
-                cursor.execute(
-                    "SELECT id, url, video_title, content FROM transcribed WHERE id = %s",
-                    (video_id,),
+                result = (
+                    db.query(Transcribed).filter(Transcribed.id == video_id).first()
                 )
             except ValueError:
                 # treat as url
-                cursor.execute(
-                    "SELECT id, url, video_title, content FROM transcribed WHERE url = %s",
-                    (video_id_or_url,),
+                result = (
+                    db.query(Transcribed)
+                    .filter(Transcribed.url == video_id_or_url)
+                    .first()
                 )
 
-            result = cursor.fetchone()
             if not result:
                 if isinstance(video_id_or_url, int) or video_id_or_url.isdigit():
                     detail = f"transcription not found for id: {video_id_or_url}"
@@ -548,10 +567,8 @@ def create_app() -> FastAPI:
                     status_code=fastapi_status.HTTP_404_NOT_FOUND, detail=detail
                 )
 
-            video_id, url, video_title, content = result
-
             # create safe filename from video title
-            safe_title = re.sub(r"[^a-zA-Z0-9_\-\s]", "_", video_title)
+            safe_title = re.sub(r"[^a-zA-Z0-9_\-\s]", "_", result.video_title)
             safe_title = re.sub(r"\s+", "_", safe_title)
             filename = f"{safe_title}.txt"
             file_path = BASE_DIR / filename
@@ -559,125 +576,106 @@ def create_app() -> FastAPI:
             # write content to file
             try:
                 with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(content)
+                    f.write(result.content)
                 return {
                     "message": f"transcription exported successfully to {filename}",
                     "filename": filename,
                     "file_path": str(file_path),
-                    "video_id": video_id,
-                    "video_title": video_title,
-                    "url": url,
+                    "video_id": result.id,
+                    "video_title": result.video_title,
+                    "url": result.url,
                 }
             except IOError as e:
                 raise HTTPException(
                     status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"failed to write transcription to file: {e}",
                 )
-        except psycopg2.Error as e:
+        except Exception as e:
             raise HTTPException(
                 status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"database error: {e}",
             )
-        finally:
-            cursor.close()
-            conn.close()
 
     return _app
 
 
 def get_db_connection():
-    """establishes a connection to the postgresql database."""
+    """
+    Provides a SQLAlchemy database session.
+    """
+    db = SessionLocal()
     try:
-        conn = psycopg2.connect(
-            host=os.getenv("DB_HOST", "127.0.0.1"),
-            port=os.getenv("DB_PORT", "5432"),
-            database=os.getenv("DB_NAME", "transcriber_db"),
-            user=os.getenv("DB_USER", "gojack10"),
-            password=os.getenv("DB_PASSWORD", "moso10"),
-        )
-        return conn
-    except psycopg2.Error as e:
-        print(f"Error connecting to PostgreSQL database: {e}")
-        sys.exit(1)
+        yield db
+    finally:
+        db.close()
 
 
 def initialize_db():
-    """initializes the postgresql database and creates the necessary tables."""
-    print("initializing postgresql database...")
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
+    """initializes the database and creates the necessary tables using sqlalchemy."""
+    print("initializing database...")
     try:
-        # create downloaded_videos table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS downloaded_videos (
-                id SERIAL PRIMARY KEY,
-                url TEXT UNIQUE,
-                status TEXT NOT NULL,
-                download_date TEXT NOT NULL,
-                local_path TEXT,
-                yt_dlp_processed BOOLEAN DEFAULT false
-            )
-        """
-        )
-
-        # create transcribed table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS transcribed (
-                id SERIAL PRIMARY KEY,
-                utc_time TEXT NOT NULL,
-                pst_time TEXT NOT NULL,
-                url TEXT UNIQUE,
-                video_title TEXT NOT NULL,
-                content TEXT NOT NULL
-            )
-        """
-        )
-
-        conn.commit()
-        print("postgresql database initialization completed successfully.")
-
-    except psycopg2.Error as e:
-        print(f"error initializing postgresql database: {e}")
-        conn.rollback()
+        Base.metadata.create_all(bind=engine)
+        print("database initialization completed successfully.")
+    except Exception as e:
+        print(f"error initializing database: {e}")
         raise e
-    finally:
-        cursor.close()
-        conn.close()
 
 
 def insert_transcription_result(url: str, video_title: str, content: str):
-    """inserts the transcription result into the database."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    """inserts or updates the transcription result in the database."""
+    db = next(get_db_connection())
     now_utc = datetime.now(pytz.utc)
     now_pst = now_utc.astimezone(ZoneInfo("America/Los_Angeles"))
-    utc_time_str = now_utc.strftime("%Y-%m-%d %H:%M:%S %Z")
-    pst_time_str = now_pst.strftime("%Y-%m-%d %H:%M:%S %Z")
 
     print(f"DEBUG: Inserting transcription for URL: {url}, Title: {video_title}")
     try:
-        cursor.execute(
-            """INSERT INTO transcribed (utc_time, pst_time, url, video_title, content) 
-               VALUES (%s, %s, %s, %s, %s) 
-               ON CONFLICT (url) DO UPDATE SET 
-                   utc_time = EXCLUDED.utc_time, 
-                   pst_time = EXCLUDED.pst_time, 
-                   video_title = EXCLUDED.video_title, 
-                   content = EXCLUDED.content""",
-            (utc_time_str, pst_time_str, url, video_title, content),
-        )
-        conn.commit()
+        # For SQLite, we can use a simple approach
+        if "sqlite" in DATABASE_URL:
+            # Check if the record exists
+            existing = db.query(Transcribed).filter(Transcribed.url == url).first()
+            if existing:
+                # Update existing record
+                existing.utc_time = now_utc
+                existing.pst_time = now_pst
+                existing.video_title = video_title
+                existing.content = content
+            else:
+                # Insert new record
+                new_record = Transcribed(
+                    utc_time=now_utc,
+                    pst_time=now_pst,
+                    url=url,
+                    video_title=video_title,
+                    content=content,
+                )
+                db.add(new_record)
+        else:
+            # For PostgreSQL, use ON CONFLICT DO UPDATE
+            stmt = pg_insert(Transcribed).values(
+                utc_time=now_utc,
+                pst_time=now_pst,
+                url=url,
+                video_title=video_title,
+                content=content,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["url"],
+                set_=dict(
+                    utc_time=stmt.excluded.utc_time,
+                    pst_time=stmt.excluded.pst_time,
+                    video_title=stmt.excluded.video_title,
+                    content=stmt.excluded.content,
+                ),
+            )
+            db.execute(stmt)
+
+        db.commit()
         print(f"DEBUG: Successfully inserted/updated transcription for URL: {url}")
-    except psycopg2.Error as e:
+    except Exception as e:
         print(f"DEBUG: Error inserting/updating transcription for URL: {url}: {e}")
-        conn.rollback()
+        db.rollback()
     finally:
-        cursor.close()
-        conn.close()
+        db.close()
 
 
 def get_youtube_title(url: str) -> str:
@@ -859,158 +857,170 @@ def run_transcription_pipeline():
     processed_count = 0
     failed_count = 0
 
-    while True:
-        # Get next item from queue
-        item = video_queue.get_next_item()
-        if not item:
-            # No more items to process
-            break
+    db = SessionLocal()
+    try:
+        while True:
+            # Get next item from queue
+            item = video_queue.get_next_item()
+            if not item:
+                # No more items to process
+                break
 
-        print(f"DEBUG: Processing item: {item.url} (Type: {item.video_type.value})")
-
-        try:
-            # Update global status
-            transcription_status["status"] = "processing"
-            update_status_from_queue()
-
-            if item.url.startswith("custom://"):
-                # For custom files, the file is already uploaded, just transcribe it
-                custom_filename = item.url.replace("custom://", "")
-                file_path = CUSTOM_VIDEOS_DIR / custom_filename
-
-                if not file_path.exists():
-                    raise Exception(f"Custom file not found: {file_path}")
-
-                video_queue.update_item_status(item.id, VideoStatus.TRANSCRIBING)
-                update_status_from_queue()
-
-                # Transcribe the file using Whisper turbo model
-                model_name = os.getenv("WHISPER_MODEL", "turbo")
-                print(f"DEBUG: Using Whisper model: {model_name}")
-
-                (
-                    successfully_transcribed,
-                    failed_transcriptions,
-                    transcription_results,
-                ) = transcribe_files(model_name, [file_path])
-
-                file_path_str = str(file_path)
-                if file_path_str in failed_transcriptions:
-                    # Transcription failed
-                    video_queue.update_item_status(
-                        item.id,
-                        VideoStatus.FAILED,
-                        error_message="Failed to transcribe",
-                    )
-                    failed_count += 1
-                    transcription_status["failed_urls"].append(item.url)
-                elif file_path_str in transcription_results:
-                    # Transcription succeeded
-                    text_content = transcription_results[file_path_str]
-                    video_title = item.title or "Custom Video"
-
-                    # Save transcription result (currently just prints, could save to DB later)
-                    insert_transcription_result(item.url, video_title, text_content)
-
-                    # Update status as completed
-                    video_queue.update_item_status(item.id, VideoStatus.COMPLETED)
-                    processed_count += 1
-                    transcription_status["processed_videos"].append(
-                        {
-                            "url": item.url,
-                            "title": video_title,
-                            "transcription_length": len(text_content),
-                        }
-                    )
-                else:
-                    # Shouldn't happen, but handle it
-                    raise Exception("Transcription completed but no result found")
-
-                # Clean up custom video source file after processing
-                try:
-                    file_path.unlink()
-                    print(f"DEBUG: Deleted custom source file: {file_path}")
-                except Exception as e:
-                    print(f"DEBUG: Failed to delete custom source: {e}")
-            else:
-                # For YouTube URLs, download and then transcribe
-                video_queue.update_item_status(item.id, VideoStatus.DOWNLOADING)
-                update_status_from_queue()
-
-                # Get video title for this URL
-                video_title = get_youtube_title(item.url)
-
-                # Download the video as audio
-                success, downloaded_file, error_msg = download_youtube_video(
-                    item.url, TMP_DIR
-                )
-
-                if not success:
-                    raise Exception(f"Failed to download YouTube video: {error_msg}")
-
-                # Transcribe the downloaded audio file
-                video_queue.update_item_status(item.id, VideoStatus.TRANSCRIBING)
-                update_status_from_queue()
-
-                model_name = os.getenv("WHISPER_MODEL", "turbo")
-                print(f"DEBUG: Using Whisper model: {model_name}")
-
-                (
-                    successfully_transcribed,
-                    failed_transcriptions,
-                    transcription_results,
-                ) = transcribe_files(model_name, [downloaded_file])
-
-                file_path_str = str(downloaded_file)
-                if file_path_str in failed_transcriptions:
-                    # Transcription failed
-                    video_queue.update_item_status(
-                        item.id,
-                        VideoStatus.FAILED,
-                        error_message="Failed to transcribe",
-                    )
-                    failed_count += 1
-                    transcription_status["failed_urls"].append(item.url)
-                elif file_path_str in transcription_results:
-                    # Transcription succeeded
-                    text_content = transcription_results[file_path_str]
-
-                    # Save transcription result to database
-                    insert_transcription_result(item.url, video_title, text_content)
-
-                    # Update status as completed
-                    video_queue.update_item_status(item.id, VideoStatus.COMPLETED)
-                    processed_count += 1
-                    transcription_status["processed_videos"].append(
-                        {
-                            "url": item.url,
-                            "title": video_title,
-                            "transcription_length": len(text_content),
-                        }
-                    )
-                else:
-                    # Shouldn't happen, but handle it
-                    raise Exception("Transcription completed but no result found")
-
-                # Clean up downloaded file after processing
-                try:
-                    downloaded_file.unlink()
-                    print(f"DEBUG: Deleted downloaded file: {downloaded_file}")
-                except Exception as e:
-                    print(f"DEBUG: Failed to delete downloaded file: {e}")
-
-        except Exception as e:
-            print(f"ERROR processing item {item.url}: {e}")
-            video_queue.update_item_status(
-                item.id, VideoStatus.FAILED, error_message=str(e)
+            print(
+                f"DEBUG: Processing item: {item.url} (Type: {item.video_type.value})"
             )
-            failed_count += 1
-            transcription_status["failed_urls"].append(item.url)
 
-        finally:
-            # Mark item as complete (removed from processing)
-            video_queue.complete_current_item()
-            update_status_from_queue()
+            try:
+                # Update global status
+                transcription_status["status"] = "processing"
+                update_status_from_queue()
+
+                if item.url.startswith("custom://"):
+                    # For custom files, the file is already uploaded, just transcribe it
+                    custom_filename = item.url.replace("custom://", "")
+                    file_path = CUSTOM_VIDEOS_DIR / custom_filename
+
+                    if not file_path.exists():
+                        raise Exception(f"Custom file not found: {file_path}")
+
+                    video_queue.update_item_status(item.id, VideoStatus.TRANSCRIBING)
+                    update_status_from_queue()
+
+                    # Transcribe the file using Whisper turbo model
+                    model_name = os.getenv("WHISPER_MODEL", "turbo")
+                    print(f"DEBUG: Using Whisper model: {model_name}")
+
+                    (
+                        successfully_transcribed,
+                        failed_transcriptions,
+                        transcription_results,
+                    ) = transcribe_files(model_name, [file_path])
+
+                    file_path_str = str(file_path)
+                    if file_path_str in failed_transcriptions:
+                        # Transcription failed
+                        video_queue.update_item_status(
+                            item.id,
+                            VideoStatus.FAILED,
+                            error_message="Failed to transcribe",
+                        )
+                        failed_count += 1
+                        transcription_status["failed_urls"].append(item.url)
+                    elif file_path_str in transcription_results:
+                        # Transcription succeeded
+                        text_content = transcription_results[file_path_str]
+                        video_title = item.title or "Custom Video"
+
+                        # Save transcription result (currently just prints, could save to DB later)
+                        insert_transcription_result(
+                            item.url, video_title, text_content
+                        )
+
+                        # Update status as completed
+                        video_queue.update_item_status(item.id, VideoStatus.COMPLETED)
+                        processed_count += 1
+                        transcription_status["processed_videos"].append(
+                            {
+                                "url": item.url,
+                                "video_title": video_title,
+                                "transcription_length": len(text_content),
+                            }
+                        )
+                    else:
+                        # Shouldn't happen, but handle it
+                        raise Exception("Transcription completed but no result found")
+
+                    # Clean up custom video source file after processing
+                    try:
+                        file_path.unlink()
+                        print(f"DEBUG: Deleted custom source file: {file_path}")
+                    except Exception as e:
+                        print(f"DEBUG: Failed to delete custom source: {e}")
+                else:
+                    # For YouTube URLs, download and then transcribe
+                    video_queue.update_item_status(item.id, VideoStatus.DOWNLOADING)
+                    update_status_from_queue()
+
+                    # Get video title for this URL
+                    video_title = get_youtube_title(item.url)
+
+                    # Download the video as audio
+                    success, downloaded_file, error_msg = download_youtube_video(
+                        item.url, TMP_DIR
+                    )
+
+                    if not success:
+                        raise Exception(
+                            f"Failed to download YouTube video: {error_msg}"
+                        )
+
+                    # Transcribe the downloaded audio file
+                    video_queue.update_item_status(item.id, VideoStatus.TRANSCRIBING)
+                    update_status_from_queue()
+
+                    model_name = os.getenv("WHISPER_MODEL", "turbo")
+                    print(f"DEBUG: Using Whisper model: {model_name}")
+
+                    (
+                        successfully_transcribed,
+                        failed_transcriptions,
+                        transcription_results,
+                    ) = transcribe_files(model_name, [downloaded_file])
+
+                    file_path_str = str(downloaded_file)
+                    if file_path_str in failed_transcriptions:
+                        # Transcription failed
+                        video_queue.update_item_status(
+                            item.id,
+                            VideoStatus.FAILED,
+                            error_message="Failed to transcribe",
+                        )
+                        failed_count += 1
+                        transcription_status["failed_urls"].append(item.url)
+                    elif file_path_str in transcription_results:
+                        # Transcription succeeded
+                        text_content = transcription_results[file_path_str]
+
+                        # Save transcription result to database
+                        insert_transcription_result(
+                            item.url, video_title, text_content
+                        )
+
+                        # Update status as completed
+                        video_queue.update_item_status(item.id, VideoStatus.COMPLETED)
+                        processed_count += 1
+                        transcription_status["processed_videos"].append(
+                            {
+                                "url": item.url,
+                                "video_title": video_title,
+                                "transcription_length": len(text_content),
+                            }
+                        )
+                    else:
+                        # Shouldn't happen, but handle it
+                        raise Exception("Transcription completed but no result found")
+
+                    # Clean up downloaded file after processing
+                    try:
+                        downloaded_file.unlink()
+                        print(f"DEBUG: Deleted downloaded file: {downloaded_file}")
+                    except Exception as e:
+                        print(f"DEBUG: Failed to delete downloaded file: {e}")
+
+            except Exception as e:
+                print(f"ERROR processing item {item.url}: {e}")
+                video_queue.update_item_status(
+                    item.id, VideoStatus.FAILED, error_message=str(e)
+                )
+                failed_count += 1
+                transcription_status["failed_urls"].append(item.url)
+
+            finally:
+                # Mark item as complete (removed from processing)
+                video_queue.complete_current_item()
+                update_status_from_queue()
+    finally:
+        db.close()
 
     # Final status update
     total_processed = processed_count + failed_count

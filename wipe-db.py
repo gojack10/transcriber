@@ -1,5 +1,9 @@
 import psycopg2
 import sys
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def wipe_database():
     """Connects to the PostgreSQL database and drops specified tables."""
@@ -7,11 +11,11 @@ def wipe_database():
     cursor = None
     try:
         conn = psycopg2.connect(
-            host="127.0.0.1",
-            port="5432",
-            database="transcriber_db",
-            user="gojack10",
-            password="moso10"
+            host=os.getenv("DB_HOST", "127.0.0.1"),
+            port=os.getenv("DB_PORT", "5432"),
+            database=os.getenv("DB_NAME", "transcriber_db"),
+            user=os.getenv("DB_USER", "gojack10"),
+            password=os.getenv("DB_PASSWORD", "moso10")
         )
         cursor = conn.cursor()
 

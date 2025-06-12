@@ -12,10 +12,10 @@ services:
       # database connection details - please update these with your actual credentials
       - DB_HOST=transcriber-db # service name of the postgres container
       - DB_PORT=5432
-      - DB_NAME=transcriber_db # replace with your database name
-      - DB_USER=gojack10       # replace with your database user
-      - DB_PASSWORD=moso10     # replace with your database password
-      - WHISPER_MODEL=turbo  # change as needed (e.g., tiny.en, small.en, medium.en)
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - WHISPER_MODEL=${WHISPER_MODEL}
       - PYTHONUNBUFFERED=1
       # if your app needs timezone data, uncomment and set appropriately
       # - TZ=america/los_angeles
@@ -42,9 +42,9 @@ services:
     container_name: transcriber-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: gojack10
-      POSTGRES_PASSWORD: moso10
-      POSTGRES_DB: transcriber_db
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - /mnt/massstorage/transcription-db:/var/lib/postgresql/data/pgdata # new host path

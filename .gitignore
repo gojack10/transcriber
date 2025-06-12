@@ -11,3 +11,5 @@ whisper-cache
 !requirements.txt
 custom_videos/
 video_queue.json
+plan.md
+.env
