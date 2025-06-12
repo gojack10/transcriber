@@ -15,6 +15,8 @@ import psycopg2
 import pytz
 import uvicorn
 import whisper
+import torch
+import gc
 from fastapi import (
     BackgroundTasks,
     Body,
@@ -785,6 +787,7 @@ def transcribe_files(
             transcription_results,
         )
 
+    model = None
     try:
         # check if the model name is valid, otherwise default to "turbo"
         valid_models = whisper.available_models()
@@ -818,6 +821,17 @@ def transcribe_files(
         # if a general error occurs (e.g., model loading), mark all as failed
         for audio_file_path in file_paths:
             failed_transcription_files.append(str(audio_file_path))
+
+    finally:
+        if model is not None:
+            try:
+                del model
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                print("DEBUG: Whisper model unloaded from memory.")
+            except Exception as e:
+                print(f"DEBUG: Error unloading Whisper model: {e}")
 
     print(
         f"DEBUG: transcribe_files completed. Success: {len(successfully_transcribed_files)}, Fail: {len(failed_transcription_files)}"
