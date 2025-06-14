@@ -162,6 +162,31 @@ class VideoProcessingQueue:
                     pass
                 self.processing_item = None
                 self._save_queue()
+
+    def get_all_and_lock_for_batch(self) -> List[VideoQueueItem]:
+        with self.lock:
+            if self.processing_item:
+                return [] # Already processing
+            
+            items = list(self.queue)
+            self.queue.clear()
+            
+            if items:
+                # To make `is_processing()` return true, we set a placeholder item.
+                # This is a bit of a hack, but it avoids refactoring the whole class.
+                self.processing_item = VideoQueueItem(
+                    url="batch_processing",
+                    video_type=VideoType.CUSTOM,
+                    title=f"Batch of {len(items)} items"
+                )
+            
+            self._save_queue()
+            return items
+
+    def release_batch_lock(self):
+        with self.lock:
+            self.processing_item = None
+            self._save_queue()
     
     def get_status(self) -> Dict[str, Any]:
         """Get current queue status"""

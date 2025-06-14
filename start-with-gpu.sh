@@ -33,13 +33,13 @@ sleep 5
 
 echo "starting transcription service with GPU support..."
 docker run -d \
-  --name transcription_service \
-  --restart unless-stopped \
-  --gpus all \
-  -e NVIDIA_VISIBLE_DEVICES=all \
-  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
-  -e DB_HOST=transcriber-db \
-  -e DB_PORT=5432 \
+   --name transcription_service \
+   --restart unless-stopped \
+   --gpus all \
+   -e NVIDIA_VISIBLE_DEVICES=all \
+   -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+   -e DB_HOST=transcriber-db \
+   -e DB_PORT=5432 \
   -e DB_NAME=${DB_NAME} \
   -e DB_USER=${DB_USER} \
   -e DB_PASSWORD=${DB_PASSWORD} \

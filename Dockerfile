@@ -1,5 +1,5 @@
 # use an nvidia cuda runtime as a parent image
-FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
 # set environment variables (fixing legacy format warnings)
 ENV DB_HOST="host.docker.internal"
@@ -9,8 +9,6 @@ ENV DB_USER="gojack10"
 ENV DB_PASSWORD="moso10"
 ENV WHISPER_MODEL="base.en"
 ENV PYTHONUNBUFFERED=1
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
@@ -48,7 +46,7 @@ COPY requirements.txt .
 # install pytorch with cuda support first, then the rest of requirements
 # ensure this torch version is compatible with whisper and cuda 11.8
 # check whisper's torch dependency if issues arise
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir yt-dlp
 

@@ -46,6 +46,13 @@ from sqlalchemy.orm import sessionmaker, Session
 # Import our new queue module
 from video_queue import VideoProcessingQueue, VideoStatus, VideoType
 
+# Eagerly initialize CUDA to prevent race conditions with background workers.
+if torch.cuda.is_available():
+    print("CUDA device detected. GPU will be used for transcription.")
+    # The following line ensures the CUDA context is initialized on startup.
+    torch.cuda.get_device_name(0)
+else:
+    print("No CUDA device detected. Transcription will run on CPU.")
 
 class UrlList(BaseModel):
     urls: List[str]
@@ -696,8 +703,26 @@ def get_youtube_title(url: str) -> str:
         return "Unknown Video"
 
 
+def sanitize_for_filename(text: str) -> str:
+    """
+    Cleans a string to be suitable for a filename.
+    - Keeps alphanumeric characters, dashes, commas, and underscores.
+    - Replaces other characters with a space.
+    - Collapses multiple spaces/underscores into a single underscore.
+    - Removes leading/trailing underscores.
+    """
+    # Allow alphanumeric, dash, comma, underscore, and space
+    # Replace any character that is NOT in this set with a space
+    text = re.sub(r"[^a-zA-Z0-9_,\-\s]", " ", text)
+    # Replace multiple spaces or underscores with a single underscore
+    text = re.sub(r"[\s_]+", "_", text)
+    # Remove leading/trailing underscores
+    text = text.strip("_")
+    return text
+
+
 def download_youtube_video(
-    url: str, output_dir: Path
+    url: str, output_dir: Path, title: str
 ) -> Tuple[bool, Optional[Path], str]:
     """
     download a youtube video as audio using yt-dlp.
@@ -711,6 +736,11 @@ def download_youtube_video(
         # ensure output directory exists
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Sanitize the title to create a safe filename
+        safe_title = sanitize_for_filename(title)
+        output_filename = f"{safe_title}.mp3"
+        output_path = output_dir / output_filename
+
         # use yt-dlp to download audio only
         # format: best quality audio, convert to mp3
         cmd = [
@@ -721,7 +751,7 @@ def download_youtube_video(
             "--audio-quality",
             "0",  # best quality
             "--output",
-            str(output_dir / "%(title)s.%(ext)s"),
+            str(output_path),
             "--no-playlist",  # only download single video, not playlist
             url,
         ]
@@ -731,14 +761,11 @@ def download_youtube_video(
         print(f"DEBUG: yt-dlp completed successfully for {url}")
 
         # find the downloaded file
-        # yt-dlp should have created a file with the video title as name
-        mp3_files = list(output_dir.glob("*.mp3"))
-        if mp3_files:
-            downloaded_file = mp3_files[0]  # get the first (should be only) mp3 file
-            print(f"DEBUG: Found downloaded file: {downloaded_file}")
-            return True, downloaded_file, ""
+        if output_path.exists():
+            print(f"DEBUG: Found downloaded file: {output_path}")
+            return True, output_path, ""
         else:
-            error_msg = "no mp3 file found after download"
+            error_msg = f"no mp3 file found at the expected path: {output_path}"
             print(f"DEBUG: {error_msg}")
             return False, None, error_msg
 
@@ -843,222 +870,140 @@ def transcribe_files(
 
 def run_transcription_pipeline():
     """
-    main pipeline to download, transcribe, and manage video/audio processing using the queue.
+    Main pipeline to download, transcribe, and manage video/audio processing.
+    This function processes the entire queue in a batch to optimize model loading.
     """
     global transcription_status, video_queue
-    print(f"DEBUG: run_transcription_pipeline started.")
+    print("DEBUG: Batch transcription pipeline started.")
 
-    # ensure database and tables exist before processing
+    # 1. Initialization
     try:
-        print(
-            "DEBUG: run_transcription_pipeline - Ensuring database and tables exist..."
-        )
         initialize_db()
-        print("DEBUG: run_transcription_pipeline - Database initialization completed.")
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        print(
-            f"DEBUG: run_transcription_pipeline - Database initialization failed: {e}"
-        )
-        transcription_status["status"] = "error"
-        transcription_status["progress"] = "0/0"
+        transcription_status = {
+            "status": "error", "progress": "0/0", "processed_videos": [],
+            "failed_urls": [f"DB initialization failed: {e}"],
+        }
+        print(f"DEBUG: Pipeline failed during DB initialization: {e}")
         return
 
-    if not TMP_DIR.exists():
-        TMP_DIR.mkdir(parents=True, exist_ok=True)
-        print(f"DEBUG: Created TMP_DIR: {TMP_DIR}")
-
-    # Process items from queue
-    processed_count = 0
-    failed_count = 0
-
-    db = SessionLocal()
-    try:
-        while True:
-            # Get next item from queue
-            item = video_queue.get_next_item()
-            if not item:
-                # No more items to process
-                break
-
-            print(
-                f"DEBUG: Processing item: {item.url} (Type: {item.video_type.value})"
-            )
-
-            try:
-                # Update global status
-                transcription_status["status"] = "processing"
-                update_status_from_queue()
-
-                if item.url.startswith("custom://"):
-                    # For custom files, the file is already uploaded, just transcribe it
-                    custom_filename = item.url.replace("custom://", "")
-                    file_path = CUSTOM_VIDEOS_DIR / custom_filename
-
-                    if not file_path.exists():
-                        raise Exception(f"Custom file not found: {file_path}")
-
-                    video_queue.update_item_status(item.id, VideoStatus.TRANSCRIBING)
-                    update_status_from_queue()
-
-                    # Transcribe the file using Whisper turbo model
-                    model_name = os.getenv("WHISPER_MODEL", "turbo")
-                    print(f"DEBUG: Using Whisper model: {model_name}")
-
-                    (
-                        successfully_transcribed,
-                        failed_transcriptions,
-                        transcription_results,
-                    ) = transcribe_files(model_name, [file_path])
-
-                    file_path_str = str(file_path)
-                    if file_path_str in failed_transcriptions:
-                        # Transcription failed
-                        video_queue.update_item_status(
-                            item.id,
-                            VideoStatus.FAILED,
-                            error_message="Failed to transcribe",
-                        )
-                        failed_count += 1
-                        transcription_status["failed_urls"].append(item.url)
-                    elif file_path_str in transcription_results:
-                        # Transcription succeeded
-                        text_content = transcription_results[file_path_str]
-                        video_title = item.title or "Custom Video"
-
-                        # Save transcription result (currently just prints, could save to DB later)
-                        insert_transcription_result(
-                            item.url, video_title, text_content
-                        )
-
-                        # Update status as completed
-                        video_queue.update_item_status(item.id, VideoStatus.COMPLETED)
-                        processed_count += 1
-                        transcription_status["processed_videos"].append(
-                            {
-                                "url": item.url,
-                                "video_title": video_title,
-                                "transcription_length": len(text_content),
-                            }
-                        )
-                    else:
-                        # Shouldn't happen, but handle it
-                        raise Exception("Transcription completed but no result found")
-
-                    # Clean up custom video source file after processing
-                    try:
-                        file_path.unlink()
-                        print(f"DEBUG: Deleted custom source file: {file_path}")
-                    except Exception as e:
-                        print(f"DEBUG: Failed to delete custom source: {e}")
-                else:
-                    # For YouTube URLs, download and then transcribe
-                    video_queue.update_item_status(item.id, VideoStatus.DOWNLOADING)
-                    update_status_from_queue()
-
-                    # Get video title for this URL
-                    video_title = get_youtube_title(item.url)
-
-                    # Download the video as audio
-                    success, downloaded_file, error_msg = download_youtube_video(
-                        item.url, TMP_DIR
-                    )
-
-                    if not success:
-                        raise Exception(
-                            f"Failed to download YouTube video: {error_msg}"
-                        )
-
-                    # Transcribe the downloaded audio file
-                    video_queue.update_item_status(item.id, VideoStatus.TRANSCRIBING)
-                    update_status_from_queue()
-
-                    model_name = os.getenv("WHISPER_MODEL", "turbo")
-                    print(f"DEBUG: Using Whisper model: {model_name}")
-
-                    (
-                        successfully_transcribed,
-                        failed_transcriptions,
-                        transcription_results,
-                    ) = transcribe_files(model_name, [downloaded_file])
-
-                    file_path_str = str(downloaded_file)
-                    if file_path_str in failed_transcriptions:
-                        # Transcription failed
-                        video_queue.update_item_status(
-                            item.id,
-                            VideoStatus.FAILED,
-                            error_message="Failed to transcribe",
-                        )
-                        failed_count += 1
-                        transcription_status["failed_urls"].append(item.url)
-                    elif file_path_str in transcription_results:
-                        # Transcription succeeded
-                        text_content = transcription_results[file_path_str]
-
-                        # Save transcription result to database
-                        insert_transcription_result(
-                            item.url, video_title, text_content
-                        )
-
-                        # Update status as completed
-                        video_queue.update_item_status(item.id, VideoStatus.COMPLETED)
-                        processed_count += 1
-                        transcription_status["processed_videos"].append(
-                            {
-                                "url": item.url,
-                                "video_title": video_title,
-                                "transcription_length": len(text_content),
-                            }
-                        )
-                    else:
-                        # Shouldn't happen, but handle it
-                        raise Exception("Transcription completed but no result found")
-
-                    # Clean up downloaded file after processing
-                    try:
-                        downloaded_file.unlink()
-                        print(f"DEBUG: Deleted downloaded file: {downloaded_file}")
-                    except Exception as e:
-                        print(f"DEBUG: Failed to delete downloaded file: {e}")
-
-            except Exception as e:
-                print(f"ERROR processing item {item.url}: {e}")
-                video_queue.update_item_status(
-                    item.id, VideoStatus.FAILED, error_message=str(e)
-                )
-                failed_count += 1
-                transcription_status["failed_urls"].append(item.url)
-
-            finally:
-                # Mark item as complete (removed from processing)
-                video_queue.complete_current_item()
-                update_status_from_queue()
-    finally:
-        db.close()
-
-    # Final status update
-    total_processed = processed_count + failed_count
-    transcription_status["progress"] = f"{processed_count}/{total_processed}"
-
-    if failed_count == 0:
+    items_to_process = video_queue.get_all_and_lock_for_batch()
+    
+    # If the queue is empty, release the lock immediately and exit.
+    if not items_to_process:
+        print("DEBUG: Queue is empty. Nothing to process.")
+        transcription_status = get_initial_transcription_status()
         transcription_status["status"] = "completed"
-    else:
-        transcription_status["status"] = "completed_with_errors"
+        video_queue.release_batch_lock()
+        return
 
-    print(
-        f"DEBUG: Pipeline completed. Processed: {processed_count}, Failed: {failed_count}"
-    )
+    # This is the main try/finally block to ensure the batch lock is always released.
+    try:
+        files_to_transcribe = []
+        url_to_item_map = {}
+        
+        for item in items_to_process:
+            url_to_item_map[item.url] = item
 
-    # Clean up temp directory
-    if TMP_DIR.exists():
-        import shutil
+        transcription_status["status"] = "processing"
+        transcription_status["progress"] = f"0/{len(items_to_process)}"
 
+        # 2. Prepare files (Download, find local paths)
+        db = SessionLocal()
         try:
-            shutil.rmtree(TMP_DIR)
-            print(f"DEBUG: Cleaned up temp directory: {TMP_DIR}")
-        except Exception as e:
-            print(f"DEBUG: Failed to clean up temp directory: {e}")
-        TMP_DIR.mkdir(parents=True, exist_ok=True)
+            for item in items_to_process:
+                try:
+                    if item.video_type == VideoType.CUSTOM:
+                        filename = item.url.replace("custom://", "")
+                        filepath = CUSTOM_VIDEOS_DIR / filename
+                        if filepath.exists():
+                            files_to_transcribe.append(filepath)
+                            item.local_path = str(filepath)
+                        else:
+                            raise FileNotFoundError(f"Custom file not found: {filepath}")
+                    
+                    elif item.video_type == VideoType.YOUTUBE:
+                        video_queue.update_item_status(item.id, VideoStatus.DOWNLOADING)
+                        update_status_from_queue()
+                        
+                        title = get_youtube_title(item.url)
+                        item.title = title
+                        
+                        success, downloaded_path, error_msg = download_youtube_video(item.url, TMP_DIR, title)
+                        if success and downloaded_path:
+                            files_to_transcribe.append(downloaded_path)
+                            item.local_path = str(downloaded_path)
+                        else:
+                            raise Exception(f"Download failed: {error_msg}")
+
+                except Exception as e:
+                    print(f"ERROR preparing {item.url}: {e}")
+                    video_queue.update_item_status(item.id, VideoStatus.FAILED, error_message=str(e))
+                    transcription_status["failed_urls"].append(item.url)
+        finally:
+            db.close()
+
+        # 3. Batch transcribe all prepared files
+        if files_to_transcribe:
+            model_name = os.getenv("WHISPER_MODEL", "turbo")
+            (
+                successfully_transcribed,
+                failed_transcriptions,
+                transcription_results,
+            ) = transcribe_files(model_name, files_to_transcribe)
+
+            # 4. Process results and update database
+            processed_count = 0
+            for item in items_to_process:
+                # Only process items that had a local path and were not marked as failed during prep
+                if item.local_path and item.status != VideoStatus.FAILED:
+                    if Path(item.local_path) in successfully_transcribed:
+                        try:
+                            text_content = transcription_results[item.local_path]
+                            insert_transcription_result(item.url, item.title, text_content)
+                            video_queue.update_item_status(item.id, VideoStatus.COMPLETED)
+                            processed_count += 1
+                            transcription_status["processed_videos"].append({
+                                "url": item.url,
+                                "video_title": item.title,
+                                "transcription_length": len(text_content),
+                            })
+                        except Exception as e:
+                            print(f"ERROR processing successful transcription for {item.url}: {e}")
+                            video_queue.update_item_status(item.id, VideoStatus.FAILED, error_message=str(e))
+                            if item.url not in transcription_status["failed_urls"]:
+                                transcription_status["failed_urls"].append(item.url)
+                    
+                    elif item.local_path in failed_transcriptions:
+                        video_queue.update_item_status(item.id, VideoStatus.FAILED, error_message="Transcription failed")
+                        if item.url not in transcription_status["failed_urls"]:
+                            transcription_status["failed_urls"].append(item.url)
+
+            transcription_status["progress"] = f"{processed_count}/{len(items_to_process)}"
+
+        # 5. Finalize status
+        if transcription_status["failed_urls"]:
+            transcription_status["status"] = "completed_with_errors"
+        else:
+            transcription_status["status"] = "completed"
+
+        print(f"DEBUG: Pipeline completed. "
+              f"Successful: {len(transcription_status['processed_videos'])}, "
+              f"Failed: {len(transcription_status['failed_urls'])}")
+
+        # Clean up all temporary files
+        for path in files_to_transcribe:
+            try:
+                if path.exists():
+                    path.unlink()
+                    print(f"DEBUG: Cleaned up file: {path}")
+            except Exception as e:
+                print(f"DEBUG: Failed to clean up file {path}: {e}")
+
+    finally:
+        # This ensures the lock is released and the processing item is cleared.
+        video_queue.release_batch_lock()
 
 
 # Create the app
