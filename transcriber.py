@@ -24,6 +24,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
     UploadFile,
 )
 from fastapi import status as fastapi_status
@@ -151,11 +152,6 @@ def update_status_from_queue():
 
 # --- sqlalchemy setup ---
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./transcriber.db")
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
-)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
@@ -185,6 +181,15 @@ def create_app() -> FastAPI:
 
     _app = FastAPI()
 
+    # Database setup is now managed within the app factory
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
+    )
+    _app.state.engine = engine
+    _app.state.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
     # --- api endpoints ---
     @_app.post("/add_links", status_code=fastapi_status.HTTP_200_OK)
     async def add_links_to_list(payload: UrlList = Body(...)):
@@ -204,7 +209,7 @@ def create_app() -> FastAPI:
             )
 
     @_app.post("/trigger_transcription", status_code=fastapi_status.HTTP_202_ACCEPTED)
-    async def trigger_transcription_processing(background_tasks: BackgroundTasks):
+    async def trigger_transcription_processing(request: Request, background_tasks: BackgroundTasks):
         """
         triggers the transcription pipeline to run in the background.
         """
@@ -241,7 +246,7 @@ def create_app() -> FastAPI:
         update_status_from_queue()
 
         print(f"DEBUG: /trigger_transcription: Starting background task")
-        background_tasks.add_task(run_transcription_pipeline)
+        background_tasks.add_task(run_transcription_pipeline, SessionLocal=request.app.state.SessionLocal)
 
         return {
             "message": "transcription process triggered.",
@@ -608,10 +613,11 @@ def create_app() -> FastAPI:
     return _app
 
 
-def get_db_connection():
+def get_db_connection(request: Request):
     """
-    Provides a SQLAlchemy database session.
+    Provides a SQLAlchemy database session from the application state.
     """
+    SessionLocal = request.app.state.SessionLocal
     db = SessionLocal()
     try:
         yield db
@@ -619,72 +625,60 @@ def get_db_connection():
         db.close()
 
 
-def initialize_db():
-    """initializes the database and creates the necessary tables using sqlalchemy."""
-    print("initializing database...")
-    try:
-        Base.metadata.create_all(bind=engine)
-        print("database initialization completed successfully.")
-    except Exception as e:
-        print(f"error initializing database: {e}")
-        raise e
 
 
-def insert_transcription_result(url: str, video_title: str, content: str):
+def insert_transcription_result(db: Session, url: str, video_title: str, content: str):
     """inserts or updates the transcription result in the database."""
-    db = next(get_db_connection())
     now_utc = datetime.now(pytz.utc)
     now_pst = now_utc.astimezone(ZoneInfo("America/Los_Angeles"))
 
-    print(f"DEBUG: Inserting transcription for URL: {url}, Title: {video_title}")
-    try:
-        # For SQLite, we can use a simple approach
-        if "sqlite" in DATABASE_URL:
-            # Check if the record exists
-            existing = db.query(Transcribed).filter(Transcribed.url == url).first()
-            if existing:
-                # Update existing record
-                existing.utc_time = now_utc
-                existing.pst_time = now_pst
-                existing.video_title = video_title
-                existing.content = content
-            else:
-                # Insert new record
-                new_record = Transcribed(
-                    utc_time=now_utc,
-                    pst_time=now_pst,
-                    url=url,
-                    video_title=video_title,
-                    content=content,
-                )
-                db.add(new_record)
+    print(f"DB_DEBUG: Attempting to insert/update transcription for URL: {url}")
+
+    # For SQLite, we can use a simple approach
+    if "sqlite" in DATABASE_URL:
+        # Check if the record exists
+        existing = db.query(Transcribed).filter(Transcribed.url == url).first()
+        if existing:
+            print(f"DB_DEBUG: Found existing record for {url}. Updating it.")
+            # Update existing record
+            existing.utc_time = now_utc
+            existing.pst_time = now_pst
+            existing.video_title = video_title
+            existing.content = content
         else:
-            # For PostgreSQL, use ON CONFLICT DO UPDATE
-            stmt = pg_insert(Transcribed).values(
+            print(f"DB_DEBUG: No existing record for {url}. Creating a new one.")
+            # Insert new record
+            new_record = Transcribed(
                 utc_time=now_utc,
                 pst_time=now_pst,
                 url=url,
                 video_title=video_title,
                 content=content,
             )
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["url"],
-                set_=dict(
-                    utc_time=stmt.excluded.utc_time,
-                    pst_time=stmt.excluded.pst_time,
-                    video_title=stmt.excluded.video_title,
-                    content=stmt.excluded.content,
-                ),
-            )
-            db.execute(stmt)
+            db.add(new_record)
+            print(f"DB_DEBUG: Added new record for {url} to the session.")
+    else:
+        # For PostgreSQL, use ON CONFLICT DO UPDATE
+        stmt = pg_insert(Transcribed).values(
+            utc_time=now_utc,
+            pst_time=now_pst,
+            url=url,
+            video_title=video_title,
+            content=content,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["url"],
+            set_=dict(
+                utc_time=stmt.excluded.utc_time,
+                pst_time=stmt.excluded.pst_time,
+                video_title=stmt.excluded.video_title,
+                content=stmt.excluded.content,
+            ),
+        )
+        db.execute(stmt)
 
-        db.commit()
-        print(f"DEBUG: Successfully inserted/updated transcription for URL: {url}")
-    except Exception as e:
-        print(f"DEBUG: Error inserting/updating transcription for URL: {url}: {e}")
-        db.rollback()
-    finally:
-        db.close()
+    # The commit is handled by the calling function to manage the transaction boundary.
+    print(f"DEBUG: Queued transcription for insertion/update for URL: {url}")
 
 
 def get_youtube_title(url: str) -> str:
@@ -868,7 +862,76 @@ def transcribe_files(
     )
 
 
-def run_transcription_pipeline():
+def _save_transcription_results(
+    SessionLocal: sessionmaker,
+    items_to_save: List,
+    transcription_results: Dict[str, str],
+    successfully_transcribed: List[Path],
+    failed_transcriptions: List[str],
+):
+    """
+    Saves the results of a transcription batch to the database in a single transaction.
+    """
+    print(f"DB_DEBUG: _save_transcription_results called with {len(items_to_save)} items to save.")
+    if not items_to_save:
+        print("DB_DEBUG: No items to save, returning.")
+        return 0
+
+    saved_count = 0
+    print("DB_DEBUG: Opening database session with context manager.")
+    with SessionLocal() as db:
+        try:
+            print(f"DB_DEBUG: Starting to loop through {len(items_to_save)} items.")
+            for item in items_to_save:
+                print(f"DB_DEBUG: Processing item: {item.url} (Status: {item.status})")
+                if Path(item.local_path) in successfully_transcribed:
+                    try:
+                        text_content = transcription_results[item.local_path]
+                        insert_transcription_result(
+                            db, item.url, item.title, text_content
+                        )
+                        video_queue.update_item_status(item.id, VideoStatus.COMPLETED)
+                        saved_count += 1
+                        transcription_status["processed_videos"].append({
+                            "url": item.url,
+                            "video_title": item.title,
+                            "transcription_length": len(text_content),
+                        })
+                    except Exception as e:
+                        print(
+                            f"ERROR saving result for {item.url} to database: {e}"
+                        )
+                        video_queue.update_item_status(
+                            item.id, VideoStatus.FAILED, error_message=str(e)
+                        )
+                        if item.url not in transcription_status["failed_urls"]:
+                            transcription_status["failed_urls"].append(item.url)
+                elif item.local_path in failed_transcriptions:
+                    video_queue.update_item_status(item.id, VideoStatus.FAILED, error_message="Transcription failed")
+                    if item.url not in transcription_status["failed_urls"]:
+                        transcription_status["failed_urls"].append(item.url)
+            
+            print(f"DB_DEBUG: Loop finished. Attempting to commit {saved_count} records.")
+            db.commit()
+            print(f"DB_DEBUG: Commit successful. Committed {saved_count} transcription(s) to the database.")
+        except Exception as e:
+            print(f"CRITICAL ERROR during database commit: {e}")
+            print("DB_DEBUG: Rolling back transaction.")
+            db.rollback()
+            # Mark all items in this batch as failed if the transaction fails
+            for item in items_to_save:
+                video_queue.update_item_status(
+                    item.id,
+                    VideoStatus.FAILED,
+                    error_message=f"DB transaction failed: {e}",
+                )
+                if item.url not in transcription_status["failed_urls"]:
+                    transcription_status["failed_urls"].append(item.url)
+            raise  # Re-raise the exception to be handled by the main pipeline
+    return saved_count
+
+
+def run_transcription_pipeline(SessionLocal: sessionmaker):
     """
     Main pipeline to download, transcribe, and manage video/audio processing.
     This function processes the entire queue in a batch to optimize model loading.
@@ -878,7 +941,7 @@ def run_transcription_pipeline():
 
     # 1. Initialization
     try:
-        initialize_db()
+        # DB is initialized on app startup, no need to call it here.
         TMP_DIR.mkdir(parents=True, exist_ok=True)
     except Exception as e:
         transcription_status = {
@@ -890,7 +953,6 @@ def run_transcription_pipeline():
 
     items_to_process = video_queue.get_all_and_lock_for_batch()
     
-    # If the queue is empty, release the lock immediately and exit.
     if not items_to_process:
         print("DEBUG: Queue is empty. Nothing to process.")
         transcription_status = get_initial_transcription_status()
@@ -898,11 +960,11 @@ def run_transcription_pipeline():
         video_queue.release_batch_lock()
         return
 
-    # This is the main try/finally block to ensure the batch lock is always released.
     try:
         files_to_transcribe = []
         url_to_item_map = {}
-        
+        processed_count = 0
+
         for item in items_to_process:
             url_to_item_map[item.url] = item
 
@@ -910,39 +972,35 @@ def run_transcription_pipeline():
         transcription_status["progress"] = f"0/{len(items_to_process)}"
 
         # 2. Prepare files (Download, find local paths)
-        db = SessionLocal()
-        try:
-            for item in items_to_process:
-                try:
-                    if item.video_type == VideoType.CUSTOM:
-                        filename = item.url.replace("custom://", "")
-                        filepath = CUSTOM_VIDEOS_DIR / filename
-                        if filepath.exists():
-                            files_to_transcribe.append(filepath)
-                            item.local_path = str(filepath)
-                        else:
-                            raise FileNotFoundError(f"Custom file not found: {filepath}")
+        for item in items_to_process:
+            try:
+                if item.video_type == VideoType.CUSTOM:
+                    filename = item.url.replace("custom://", "")
+                    filepath = CUSTOM_VIDEOS_DIR / filename
+                    if filepath.exists():
+                        files_to_transcribe.append(filepath)
+                        item.local_path = str(filepath)
+                    else:
+                        raise FileNotFoundError(f"Custom file not found: {filepath}")
+                
+                elif item.video_type == VideoType.YOUTUBE:
+                    video_queue.update_item_status(item.id, VideoStatus.DOWNLOADING)
+                    update_status_from_queue()
                     
-                    elif item.video_type == VideoType.YOUTUBE:
-                        video_queue.update_item_status(item.id, VideoStatus.DOWNLOADING)
-                        update_status_from_queue()
-                        
-                        title = get_youtube_title(item.url)
-                        item.title = title
-                        
-                        success, downloaded_path, error_msg = download_youtube_video(item.url, TMP_DIR, title)
-                        if success and downloaded_path:
-                            files_to_transcribe.append(downloaded_path)
-                            item.local_path = str(downloaded_path)
-                        else:
-                            raise Exception(f"Download failed: {error_msg}")
+                    title = get_youtube_title(item.url)
+                    item.title = title
+                    
+                    success, downloaded_path, error_msg = download_youtube_video(item.url, TMP_DIR, title)
+                    if success and downloaded_path:
+                        files_to_transcribe.append(downloaded_path)
+                        item.local_path = str(downloaded_path)
+                    else:
+                        raise Exception(f"Download failed: {error_msg}")
 
-                except Exception as e:
-                    print(f"ERROR preparing {item.url}: {e}")
-                    video_queue.update_item_status(item.id, VideoStatus.FAILED, error_message=str(e))
-                    transcription_status["failed_urls"].append(item.url)
-        finally:
-            db.close()
+            except Exception as e:
+                print(f"ERROR preparing {item.url}: {e}")
+                video_queue.update_item_status(item.id, VideoStatus.FAILED, error_message=str(e))
+                transcription_status["failed_urls"].append(item.url)
 
         # 3. Batch transcribe all prepared files
         if files_to_transcribe:
@@ -953,33 +1011,17 @@ def run_transcription_pipeline():
                 transcription_results,
             ) = transcribe_files(model_name, files_to_transcribe)
 
-            # 4. Process results and update database
-            processed_count = 0
-            for item in items_to_process:
-                # Only process items that had a local path and were not marked as failed during prep
-                if item.local_path and item.status != VideoStatus.FAILED:
-                    if Path(item.local_path) in successfully_transcribed:
-                        try:
-                            text_content = transcription_results[item.local_path]
-                            insert_transcription_result(item.url, item.title, text_content)
-                            video_queue.update_item_status(item.id, VideoStatus.COMPLETED)
-                            processed_count += 1
-                            transcription_status["processed_videos"].append({
-                                "url": item.url,
-                                "video_title": item.title,
-                                "transcription_length": len(text_content),
-                            })
-                        except Exception as e:
-                            print(f"ERROR processing successful transcription for {item.url}: {e}")
-                            video_queue.update_item_status(item.id, VideoStatus.FAILED, error_message=str(e))
-                            if item.url not in transcription_status["failed_urls"]:
-                                transcription_status["failed_urls"].append(item.url)
-                    
-                    elif item.local_path in failed_transcriptions:
-                        video_queue.update_item_status(item.id, VideoStatus.FAILED, error_message="Transcription failed")
-                        if item.url not in transcription_status["failed_urls"]:
-                            transcription_status["failed_urls"].append(item.url)
+            # 4. Process and save results to the database
+            items_to_save = [
+                item
+                for item in items_to_process
+                if item.local_path and item.status != VideoStatus.FAILED
+            ]
 
+            processed_count = _save_transcription_results(
+                SessionLocal, items_to_save, transcription_results, successfully_transcribed, failed_transcriptions
+            )
+            
             transcription_status["progress"] = f"{processed_count}/{len(items_to_process)}"
 
         # 5. Finalize status
@@ -989,7 +1031,7 @@ def run_transcription_pipeline():
             transcription_status["status"] = "completed"
 
         print(f"DEBUG: Pipeline completed. "
-              f"Successful: {len(transcription_status['processed_videos'])}, "
+              f"Successful: {processed_count}, "
               f"Failed: {len(transcription_status['failed_urls'])}")
 
         # Clean up all temporary files
@@ -1000,19 +1042,47 @@ def run_transcription_pipeline():
                     print(f"DEBUG: Cleaned up file: {path}")
             except Exception as e:
                 print(f"DEBUG: Failed to clean up file {path}: {e}")
-
+    
+    except Exception as e:
+        print(f"CRITICAL ERROR in transcription pipeline: {e}")
+        # Mark all unprocessed items as failed
+        for item in items_to_process:
+            if item.status not in [VideoStatus.COMPLETED, VideoStatus.FAILED]:
+                 video_queue.update_item_status(item.id, VideoStatus.FAILED, error_message=f"Pipeline error: {e}")
+                 if item.url not in transcription_status["failed_urls"]:
+                    transcription_status["failed_urls"].append(item.url)
+        transcription_status["status"] = "error"
+        raise # Re-raise the exception to be logged by the server
+    
     finally:
-        # This ensures the lock is released and the processing item is cleared.
         video_queue.release_batch_lock()
 
 
 # Create the app
 app = create_app()
 
-if __name__ == "__main__":
-    # Ensure directories exist
+@app.on_event("startup")
+def on_startup():
+    """Create database tables and required directories on application startup."""
+    print("INFO:     Application startup...")
+    # 1. Create database tables
+    print("INFO:     Initializing database...")
+    try:
+        Base.metadata.create_all(bind=app.state.engine)
+        print("INFO:     Database initialization completed successfully.")
+    except Exception as e:
+        print(f"ERROR:    Error initializing database: {e}")
+        raise e
+
+    # 2. Ensure directories exist
     TMP_DIR.mkdir(parents=True, exist_ok=True)
     CUSTOM_VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    print("INFO:     Temp and custom video directories are ready.")
+    print("INFO:     Application startup complete.")
 
+
+if __name__ == "__main__":
+    # Note: The uvicorn.run command is for development.
+    # In production, a Gunicorn/Uvicorn worker process would run this.
     print(f"Starting uvicorn server on 0.0.0.0:8000")
     uvicorn.run("transcriber:app", host="0.0.0.0", port=8000, reload=True)

@@ -38,6 +38,7 @@ docker run -d \
    --gpus all \
    -e NVIDIA_VISIBLE_DEVICES=all \
    -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+   -e DATABASE_URL=${DB_URL} \
    -e DB_HOST=transcriber-db \
    -e DB_PORT=5432 \
   -e DB_NAME=${DB_NAME} \

@@ -10,6 +10,7 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       # database connection details - please update these with your actual credentials
+      - DATABASE_URL=${DB_URL}
       - DB_HOST=transcriber-db # service name of the postgres container
       - DB_PORT=5432
       - DB_NAME=${DB_NAME}
