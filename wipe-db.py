@@ -1,40 +1,58 @@
-import psycopg2
-import sys
 import os
+import sys
 from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 
+# Load environment variables from .env file
 load_dotenv()
 
-def wipe_database():
-    """Connects to the PostgreSQL database and drops specified tables."""
-    conn = None
-    cursor = None
-    try:
-        conn = psycopg2.connect(
-            host=os.getenv("DB_HOST", "127.0.0.1"),
-            port=os.getenv("DB_PORT", "5432"),
-            database=os.getenv("DB_NAME", "transcriber_db"),
-            user=os.getenv("DB_USER", "gojack10"),
-            password=os.getenv("DB_PASSWORD", "moso10")
-        )
-        cursor = conn.cursor()
+# Import the Base and table models from the main application
+# This ensures we are using the same table definitions
+from transcriber import Base, DATABASE_URL
 
-        # Drop tables if they exist
-        cursor.execute("DROP TABLE IF EXISTS transcribed CASCADE;")
-        cursor.execute("DROP TABLE IF EXISTS downloaded_videos CASCADE;")
-        conn.commit()
-        print("Successfully wiped 'transcribed' and 'downloaded_videos' tables.")
 
-    except psycopg2.Error as e:
-        print(f"Error wiping PostgreSQL database: {e}")
-        if conn:
-            conn.rollback()
+def wipe_and_recreate_database():
+    """
+    Connects to the database defined by DATABASE_URL and safely drops and recreates
+    all tables defined in the application's SQLAlchemy models.
+    """
+    if not DATABASE_URL:
+        print("ERROR: DATABASE_URL environment variable is not set.")
         sys.exit(1)
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+
+    print(f"Connecting to database: {DATABASE_URL.split('@')[-1]}")
+
+    try:
+        engine = create_engine(DATABASE_URL)
+        with engine.connect() as connection:
+            print("Successfully connected to the database.")
+
+            # Drop all tables defined in the Base metadata
+            print("Dropping all tables...")
+            Base.metadata.drop_all(engine)
+            print("Tables dropped successfully.")
+
+            # Recreate all tables
+            print("Recreating all tables from the current models...")
+            Base.metadata.create_all(engine)
+            print("Tables recreated successfully. Database is now in sync with models.")
+
+    except OperationalError as e:
+        print(f"ERROR: Could not connect to the database.")
+        print(f"Please check your DATABASE_URL and ensure the database server is running.")
+        print(f"Details: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    wipe_database()
+    print("WARNING: This script will completely wipe and recreate your database tables.")
+    # Add a confirmation step to prevent accidental data loss
+    if input("Are you sure you want to continue? (yes/no): ").lower() != "yes":
+        print("Operation cancelled.")
+        sys.exit(0)
+    
+    wipe_and_recreate_database()

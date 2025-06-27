@@ -39,6 +39,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import declarative_base
@@ -63,6 +64,8 @@ class TranscribedVideoInfo(BaseModel):
     id: int
     url: str
     video_title: str
+    utc_time: str
+    pst_time: str
 
 
 class TranscribedVideoList(BaseModel):
@@ -169,8 +172,8 @@ class DownloadedVideo(Base):
 class Transcribed(Base):
     __tablename__ = "transcribed"
     id = Column(Integer, primary_key=True, index=True)
-    utc_time = Column(DateTime, nullable=False)
-    pst_time = Column(DateTime, nullable=False)
+    utc_time = Column(DateTime(timezone=True), nullable=False)
+    pst_time = Column(String, nullable=True)
     url = Column(String, unique=True, index=True)
     video_title = Column(String, nullable=False)
     content = Column(Text, nullable=False)
@@ -459,16 +462,41 @@ def create_app() -> FastAPI:
 
         return response
 
-    @_app.get("/transcribed_videos")
+    @_app.get("/transcribed_videos", response_model=TranscribedVideoList)
     async def get_transcribed_videos(db: Session = Depends(get_db_connection)):
         """retrieves a list of all transcribed videos from the database."""
         try:
             results = db.query(Transcribed).order_by(Transcribed.id).all()
-            videos = [
-                {"id": row.id, "url": row.url, "video_title": row.video_title}
-                for row in results
-            ]
-            return {"videos": videos}
+            video_infos = []
+            for row in results:
+                # Get the UTC time from DB and format it
+                utc_time = row.utc_time
+
+                # If the datetime object from the DB is naive (like from SQLite), make it UTC-aware.
+                if utc_time.tzinfo is None:
+                    utc_time = pytz.utc.localize(utc_time)
+
+                # Format UTC as 24-hour time
+                utc_time_str = utc_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+                # Use stored PST time if available, otherwise calculate it as fallback
+                if row.pst_time:
+                    # Use the stored formatted PST date+time string directly
+                    pst_time_str = f"{row.pst_time} PST"
+                else:
+                    # Fallback: calculate PST time (for records that haven't been migrated yet)
+                    pst_tz = ZoneInfo("America/Los_Angeles")
+                    pst_time_aware = utc_time.astimezone(pst_tz)
+                    pst_time_str = pst_time_aware.strftime("%Y-%m-%d %I:%M:%S %p %Z")
+
+                video_infos.append(TranscribedVideoInfo(
+                    id=row.id,
+                    url=row.url,
+                    video_title=row.video_title,
+                    utc_time=utc_time_str,
+                    pst_time=pst_time_str,
+                ))
+            return TranscribedVideoList(videos=video_infos)
         except Exception as e:
             raise HTTPException(
                 status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -625,59 +653,75 @@ def get_db_connection(request: Request):
         db.close()
 
 
+def format_utc_to_pst_string(utc_datetime: datetime) -> str:
+    """
+    Converts a UTC datetime to PST/PDT and formats it as full date and 12-hour time with AM/PM.
+
+    Args:
+        utc_datetime: A UTC datetime object (timezone-aware or naive)
+
+    Returns:
+        Formatted PST date and time string in format "YYYY-MM-DD HH:MM:SS AM/PM"
+
+    Example:
+        "2025-05-28 02:30:45 PM"
+    """
+    # Ensure the datetime is timezone-aware and in UTC
+    if utc_datetime.tzinfo is None:
+        # If naive, assume it's UTC
+        utc_datetime = pytz.utc.localize(utc_datetime)
+    elif utc_datetime.tzinfo != pytz.utc:
+        # If timezone-aware but not UTC, convert to UTC first
+        utc_datetime = utc_datetime.astimezone(pytz.utc)
+
+    # Convert to Pacific Time (handles PST/PDT automatically)
+    pst_tz = ZoneInfo("America/Los_Angeles")
+    pst_datetime = utc_datetime.astimezone(pst_tz)
+
+    # Format as full date and 12-hour time with AM/PM
+    return pst_datetime.strftime("%Y-%m-%d %I:%M:%S %p")
 
 
 def insert_transcription_result(db: Session, url: str, video_title: str, content: str):
-    """inserts or updates the transcription result in the database."""
+    """
+    Inserts or updates a transcription result in the database using a unified approach
+    that works for both SQLite and PostgreSQL.
+    """
     now_utc = datetime.now(pytz.utc)
-    now_pst = now_utc.astimezone(ZoneInfo("America/Los_Angeles"))
+    pst_time_str = format_utc_to_pst_string(now_utc)
 
-    print(f"DB_DEBUG: Attempting to insert/update transcription for URL: {url}")
+    # Check if a record with the same URL already exists.
+    existing_record = db.query(Transcribed).filter(Transcribed.url == url).first()
 
-    # For SQLite, we can use a simple approach
-    if "sqlite" in DATABASE_URL:
-        # Check if the record exists
-        existing = db.query(Transcribed).filter(Transcribed.url == url).first()
-        if existing:
-            print(f"DB_DEBUG: Found existing record for {url}. Updating it.")
-            # Update existing record
-            existing.utc_time = now_utc
-            existing.pst_time = now_pst
-            existing.video_title = video_title
-            existing.content = content
-        else:
-            print(f"DB_DEBUG: No existing record for {url}. Creating a new one.")
-            # Insert new record
-            new_record = Transcribed(
-                utc_time=now_utc,
-                pst_time=now_pst,
-                url=url,
-                video_title=video_title,
-                content=content,
-            )
-            db.add(new_record)
-            print(f"DB_DEBUG: Added new record for {url} to the session.")
+    if existing_record:
+        # If the record exists, update it.
+        print(f"DB_DEBUG: Found existing record for {url}. Updating it.")
+        existing_record.utc_time = now_utc
+        existing_record.pst_time = pst_time_str
+        existing_record.video_title = video_title
+        existing_record.content = content
     else:
-        # For PostgreSQL, use ON CONFLICT DO UPDATE
-        stmt = pg_insert(Transcribed).values(
+        # If the record does not exist, create a new one with a sequential ID.
+        print(f"DB_DEBUG: No existing record for {url}. Creating a new one.")
+        
+        # Atomically get the next ID.
+        max_id = db.query(func.max(Transcribed.id)).scalar() or 0
+        next_id = max_id + 1
+        print(f"DB_INSERT_DEBUG: Calculated next ID: {next_id} (max_id was {max_id})")
+
+        new_record = Transcribed(
+            id=next_id,
             utc_time=now_utc,
-            pst_time=now_pst,
+            pst_time=pst_time_str,
             url=url,
             video_title=video_title,
             content=content,
         )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["url"],
-            set_=dict(
-                utc_time=stmt.excluded.utc_time,
-                pst_time=stmt.excluded.pst_time,
-                video_title=stmt.excluded.video_title,
-                content=stmt.excluded.content,
-            ),
-        )
-        db.execute(stmt)
+        db.add(new_record)
+        # Flush the session to make the new ID available for the next item in the same batch.
+        db.flush()
+        print(f"DB_INSERT_DEBUG: Flushed session for {url}. Record is now in transaction with ID {next_id}.")
 
-    # The commit is handled by the calling function to manage the transaction boundary.
     print(f"DEBUG: Queued transcription for insertion/update for URL: {url}")
 
 
@@ -883,7 +927,6 @@ def _save_transcription_results(
         try:
             print(f"DB_DEBUG: Starting to loop through {len(items_to_save)} items.")
             for item in items_to_save:
-                print(f"DB_DEBUG: Processing item: {item.url} (Status: {item.status})")
                 if Path(item.local_path) in successfully_transcribed:
                     try:
                         text_content = transcription_results[item.local_path]
