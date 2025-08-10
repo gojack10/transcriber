@@ -34,8 +34,7 @@ services:
               capabilities: [gpu]
     depends_on:
       - transcriber-db
-    networks:
-      - transcriber_network
+
     restart: unless-stopped
 
   transcriber-db:
@@ -51,10 +50,4 @@ services:
       - /mnt/massstorage/transcription-db:/var/lib/postgresql/data/pgdata # new host path
     ports:
       - "0.0.0.0:5432:5432"
-    networks:
-      - transcriber_network
 
-networks:
-  transcriber_network:
-    driver: bridge
-    name: transcriber_app_network

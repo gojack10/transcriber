@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 import urllib.parse
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -107,6 +108,9 @@ transcription_status: Dict[str, Any] = {
     "failed_urls": [],
 }
 print(f"DEBUG: Initial transcription_status: {transcription_status}")
+
+# Global variable to track the active transcription task
+active_transcription_task = None
 
 
 def get_initial_transcription_status() -> Dict[str, Any]:
@@ -212,11 +216,11 @@ def create_app() -> FastAPI:
             )
 
     @_app.post("/trigger_transcription", status_code=fastapi_status.HTTP_202_ACCEPTED)
-    async def trigger_transcription_processing(request: Request, background_tasks: BackgroundTasks):
+    async def trigger_transcription_processing(request: Request):
         """
         triggers the transcription pipeline to run in the background.
         """
-        global transcription_status
+        global transcription_status, active_transcription_task
         print(
             f"DEBUG: /trigger_transcription endpoint hit. Current status: {transcription_status}"
         )
@@ -249,12 +253,87 @@ def create_app() -> FastAPI:
         update_status_from_queue()
 
         print(f"DEBUG: /trigger_transcription: Starting background task")
-        background_tasks.add_task(run_transcription_pipeline, SessionLocal=request.app.state.SessionLocal)
+        # Create and store the asyncio task
+        active_transcription_task = asyncio.create_task(
+            run_transcription_pipeline_async(SessionLocal=request.app.state.SessionLocal)
+        )
 
         return {
             "message": "transcription process triggered.",
             "initial_status": transcription_status,
         }
+
+    @_app.post("/abort_transcription")
+    async def abort_transcription_processing():
+        """
+        aborts the current transcription pipeline if it's running.
+        """
+        global transcription_status, active_transcription_task
+        
+        print(f"DEBUG: /abort_transcription endpoint hit")
+        
+        # Check if there's an active transcription task
+        if active_transcription_task is None:
+            print(f"DEBUG: /abort_transcription: no active transcription task found")
+            return JSONResponse(
+                status_code=fastapi_status.HTTP_200_OK,
+                content={
+                    "message": "no active transcription process to abort.",
+                    "status": "idle",
+                },
+            )
+        
+        # Check if task is actually running
+        if active_transcription_task.done():
+            print(f"DEBUG: /abort_transcription: task already completed")
+            active_transcription_task = None
+            return JSONResponse(
+                status_code=fastapi_status.HTTP_200_OK,
+                content={
+                    "message": "transcription process already completed.",
+                    "status": "completed",
+                },
+            )
+        
+        try:
+            # Cancel the active task
+            print(f"DEBUG: /abort_transcription: attempting to cancel task")
+            cancelled = active_transcription_task.cancel()
+            
+            if cancelled:
+                # Reset queue and status
+                video_queue.reset_processing()
+                transcription_status = get_initial_transcription_status()
+                transcription_status["status"] = "aborted"
+                
+                print(f"DEBUG: /abort_transcription: task cancelled successfully")
+                
+                return JSONResponse(
+                    status_code=fastapi_status.HTTP_200_OK,
+                    content={
+                        "message": "transcription process aborted successfully.",
+                        "status": "aborted",
+                    },
+                )
+            else:
+                print(f"DEBUG: /abort_transcription: task could not be cancelled")
+                return JSONResponse(
+                    status_code=fastapi_status.HTTP_400_BAD_REQUEST,
+                    content={
+                        "message": "transcription process could not be cancelled.",
+                        "status": "running",
+                    },
+                )
+                
+        except Exception as e:
+            print(f"DEBUG: /abort_transcription: error during cancellation - {str(e)}")
+            return JSONResponse(
+                status_code=fastapi_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={
+                    "message": f"error aborting transcription: {str(e)}",
+                    "status": "error",
+                },
+            )
 
     @_app.get("/status")
     async def get_status():
@@ -1100,6 +1179,23 @@ def run_transcription_pipeline(SessionLocal: sessionmaker):
     finally:
         video_queue.release_batch_lock()
 
+async def run_transcription_pipeline_async(SessionLocal: sessionmaker):
+    """
+    Async version of the transcription pipeline that can be cancelled.
+    This is a wrapper around the synchronous run_transcription_pipeline function.
+    """
+    try:
+        # Run the synchronous pipeline in a thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, run_transcription_pipeline, SessionLocal)
+    except asyncio.CancelledError:
+        print("DEBUG: Transcription pipeline was cancelled")
+        # Clean up when cancelled
+        global transcription_status, video_queue
+        video_queue.reset_processing()
+        transcription_status = get_initial_transcription_status()
+        transcription_status["status"] = "aborted"
+        raise
 
 # Create the app
 app = create_app()
