@@ -15,17 +15,17 @@ def download_audio(yt_link):
 
 import os
 
-def convert_audio(audio_path, file_name=None):
+def convert_to_audio(file_path, file_name=None):
 
     if file_name is None:
-        base = os.path.basename(audio_path)
+        base = os.path.basename(file_path)
         file_name = os.path.splitext(base)[0]
 
     output_path = f"/home/jack/llm/transcription/.temp/{file_name}.ogg"
 
     output = subprocess.run([
         "ffmpeg",
-        "-i", audio_path,
+        "-i", file_path,
         "-c:a", "libopus",
         "-b:a", "128k",
         "-y",
