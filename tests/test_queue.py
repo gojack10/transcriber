@@ -1,4 +1,4 @@
-from queue_manager import QueueManager, QueueStatus
+from wrappers.queue_manager import QueueManager, QueueStatus
 
 def test_queue_manager():
     queue_manager = QueueManager()
