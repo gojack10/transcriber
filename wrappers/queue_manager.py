@@ -13,15 +13,15 @@ class QueueStatus(Enum):
 
 class QueueItem:
     id: str
-    url: str
+    file_path: str
     status: QueueStatus
     created_at: datetime
     updated_at: datetime
     error_message: Optional[str]
 
-    def __init__(self, id: str, url: str):
+    def __init__(self, id: str, file_path: str):
         self.id = id
-        self.url = url
+        self.file_path = file_path
         self.status = QueueStatus.QUEUED
         self.created_at = datetime.now()
         self.updated_at = datetime.now()
@@ -38,19 +38,19 @@ class QueueItem:
         print(f"Marked item {self.id} as failed: {error}")
     
     def __repr__(self):
-        return f"QueueItem(id='{self.id}', url='{self.url}', status={self.status})"
+        return f"QueueItem(id='{self.id}', file_path='{self.file_path}', status={self.status})"
 
 class QueueManager:
     def __init__(self):
         self.queue = {}
         self.processing_order = []
     
-    def add_item(self, url: str) -> str:
+    def add_item(self, file_path: str) -> str:
         item_id = str(uuid.uuid4())
-        item = QueueItem(item_id, url)
+        item = QueueItem(item_id, file_path)
         self.queue[item_id] = item
         self.processing_order.append(item_id)
-        print(f"Added item {item_id} for {url}")
+        print(f"Added item {item_id} for {file_path}")
         return item_id
     
     def get_next_item(self) -> Optional[QueueItem]:

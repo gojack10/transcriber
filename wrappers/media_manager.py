@@ -17,14 +17,14 @@ def download_audio(yt_link, on_complete=None):
     
     if download_output.returncode != 0:
         if on_complete:
-            on_complete(False, download_output.stdout + download_output.stderr)
+            on_complete(False, download_output.stdout + download_output.stderr, None)
         return download_output.stdout + download_output.stderr
     
     opus_files = glob.glob(f"{temp_dir}/*.opus")
     if not opus_files:
         error_msg = "no opus file found after download"
         if on_complete:
-            on_complete(False, error_msg)
+            on_complete(False, error_msg, None)
         return error_msg
     
     opus_file = opus_files[0]
@@ -51,7 +51,7 @@ def download_audio(yt_link, on_complete=None):
     combined_output = download_output.stdout + download_output.stderr + convert_output.stdout + convert_output.stderr
     
     if on_complete:
-        on_complete(convert_output.returncode == 0, combined_output)
+        on_complete(convert_output.returncode == 0, combined_output, ogg_file)
     
     return combined_output
 
@@ -80,6 +80,6 @@ def convert_to_audio(file_path, file_name=None, on_complete=None):
     ], capture_output=True, text=True)
 
     if on_complete:
-        on_complete(output.returncode == 0, output.stdout + output.stderr)
+        on_complete(output.returncode == 0, output.stdout + output.stderr, output_path)
 
     return output.stdout + output.stderr
