@@ -1,4 +1,5 @@
 import subprocess
+import os
 
 def download_audio(yt_link):    
 
@@ -12,8 +13,6 @@ def download_audio(yt_link):
     ], capture_output=True, text=True)
 
     return output.stdout + output.stderr
-
-import os
 
 def convert_to_audio(file_path, file_name=None):
 
