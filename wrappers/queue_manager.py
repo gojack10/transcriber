@@ -19,8 +19,9 @@ class QueueItem:
     updated_at: datetime
     error_message: Optional[str]
 
-    def __init__(self, id: str, file_path: str):
+    def __init__(self, id: str, file_path: Optional[str] = None, url: Optional[str] = None):
         self.id = id
+        self.url = url
         self.file_path = file_path
         self.status = QueueStatus.QUEUED
         self.created_at = datetime.now()
@@ -45,13 +46,21 @@ class QueueManager:
         self.queue = {}
         self.processing_order = []
     
-    def add_item(self, file_path: str) -> str:
+    def add_item(self, file_path: str, url: Optional[str] = None) -> str:
         item_id = str(uuid.uuid4())
-        item = QueueItem(item_id, file_path)
+        item = QueueItem(item_id, file_path, url)
         self.queue[item_id] = item
         self.processing_order.append(item_id)
         print(f"Added item {item_id} for {file_path}")
         return item_id
+    
+    def update_item_path(self, item_id: str, new_file_path: str):
+        if item_id in self.queue:
+            self.queue[item_id].file_path = new_file_path
+            self.queue[item_id].updated_at = datetime.now()
+            print(f"Updated file path for item {item_id} to {new_file_path}")
+        else:
+            print(f"Item {item_id} not found in queue")
     
     def get_next_item(self) -> Optional[QueueItem]:
         if not self.processing_order:
