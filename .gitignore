@@ -1,0 +1,16 @@
+__pycache__/
+.*
+unconverted/
+converted/
+*.txt
+*.sqlite
+tmp/
+whisper-cache
+!.gitignore
+!requirements-dev.txt
+!requirements.txt
+custom_videos/
+video_queue.json
+plan.md
+.env
+todo.md
