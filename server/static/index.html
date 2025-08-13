@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>transcription queue manager</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>transcription queue manager</h1>
+            <div class="status-bar">
+                <span id="status-text">loading...</span>
+                <button id="refresh-btn" onclick="refreshStatus()">refresh</button>
+            </div>
+        </header>
+
+        <main>
+            <!-- file upload section -->
+            <section class="upload-section">
+                <h2>upload files</h2>
+                <div class="upload-area" id="upload-area">
+                    <div class="upload-content">
+                        <p>drag & drop files here or click to select</p>
+                        <p class="file-types">supported: mp4, avi, mov, mkv, webm, mp3, wav, ogg, m4a</p>
+                    </div>
+                    <input type="file" id="file-input" multiple accept=".mp4,.avi,.mov,.mkv,.webm,.mp3,.wav,.ogg,.m4a">
+                </div>
+            </section>
+
+            <!-- url input section -->
+            <section class="url-section">
+                <h2>add url</h2>
+                <div class="url-input-group">
+                    <input type="url" id="url-input" placeholder="paste youtube or other supported url...">
+                    <button id="add-url-btn" onclick="addUrl()">add to queue</button>
+                </div>
+            </section>
+
+            <!-- queue display -->
+            <section class="queue-section">
+                <h2>queue status</h2>
+                <div class="queue-stats" id="queue-stats">
+                    <!-- status counts will be populated here -->
+                </div>
+                <div class="queue-items" id="queue-items">
+                    <!-- queue items will be populated here -->
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
