@@ -305,7 +305,7 @@ async function viewTranscription(id, filename) {
         
         if (data.content) {
             document.getElementById('modal-title').textContent = filename;
-            document.getElementById('modal-content').textContent = data.content;
+            document.getElementById('modal-content').value = data.content;
             document.getElementById('transcription-modal').style.display = 'block';
         }
         
@@ -319,11 +319,60 @@ function closeModal() {
     document.getElementById('transcription-modal').style.display = 'none';
 }
 
+async function copyToClipboard() {
+    try {
+        const textarea = document.getElementById('modal-content');
+        const text = textarea.value;
+        
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+        } else {
+            // fallback for older browsers or non-https
+            textarea.select();
+            textarea.setSelectionRange(0, 99999);
+            document.execCommand('copy');
+        }
+        
+        // visual feedback
+        const copyBtn = document.querySelector('.copy-btn');
+        const originalText = copyBtn.textContent;
+        copyBtn.textContent = 'copied!';
+        copyBtn.style.background = '#27ae60';
+        
+        setTimeout(() => {
+            copyBtn.textContent = originalText;
+            copyBtn.style.background = '';
+        }, 1500);
+        
+        updateStatus('transcription copied to clipboard');
+        
+    } catch (error) {
+        console.error('failed to copy text:', error);
+        updateStatus('failed to copy to clipboard');
+    }
+}
+
 // close modal when clicking outside
 window.addEventListener('click', function(event) {
     const modal = document.getElementById('transcription-modal');
     if (event.target === modal) {
         closeModal();
+    }
+});
+
+// keyboard shortcuts for modal
+document.addEventListener('keydown', function(event) {
+    const modal = document.getElementById('transcription-modal');
+    if (modal.style.display === 'block') {
+        // escape to close
+        if (event.key === 'Escape') {
+            closeModal();
+        }
+        // ctrl+c to copy (additional shortcut)
+        if (event.ctrlKey && event.key === 'c' && event.target.id !== 'modal-content') {
+            event.preventDefault();
+            copyToClipboard();
+        }
     }
 });
 
