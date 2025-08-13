@@ -1,13 +1,19 @@
-// transcription queue manager frontend javascript
+// transcription automation frontend javascript
 
 let statusInterval;
+let currentTab = 'queue';
 
 // initialize app when dom loads
 document.addEventListener('DOMContentLoaded', function() {
     initializeEventListeners();
     refreshStatus();
+    loadTranscriptions();
     // auto-refresh every 2 seconds
-    statusInterval = setInterval(refreshStatus, 2000);
+    statusInterval = setInterval(() => {
+        if (currentTab === 'queue') {
+            refreshStatus();
+        }
+    }, 2000);
 });
 
 function initializeEventListeners() {
@@ -230,6 +236,96 @@ function getTimeAgo(date) {
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
     return `${Math.floor(diff / 86400)}d ago`;
 }
+
+// tab switching
+function switchTab(tabName) {
+    currentTab = tabName;
+    
+    // update tab buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelector(`[onclick="switchTab('${tabName}')"]`).classList.add('active');
+    
+    // update tab content
+    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+    document.getElementById(`${tabName}-tab`).classList.add('active');
+    
+    // load data for active tab
+    if (tabName === 'transcriptions') {
+        loadTranscriptions();
+    } else if (tabName === 'queue') {
+        refreshStatus();
+    }
+}
+
+// transcriptions functionality
+async function loadTranscriptions() {
+    try {
+        const sortBy = document.getElementById('sort-by')?.value || 'id';
+        const sortOrder = document.getElementById('sort-order')?.value || 'desc';
+        
+        const response = await fetch(`/api/transcriptions?sort_by=${sortBy}&sort_order=${sortOrder}`);
+        const data = await response.json();
+        
+        if (data.transcriptions) {
+            updateTranscriptionsTable(data.transcriptions);
+        }
+        
+    } catch (error) {
+        console.error('error loading transcriptions:', error);
+        updateStatus(`error loading transcriptions: ${error.message}`);
+    }
+}
+
+function updateTranscriptionsTable(transcriptions) {
+    const container = document.getElementById('transcriptions-list');
+    
+    if (!transcriptions || transcriptions.length === 0) {
+        container.innerHTML = '<div style="text-align: center; color: var(--fg2); padding: 20px;">no transcriptions available</div>';
+        return;
+    }
+    
+    container.innerHTML = transcriptions.map(item => `
+        <div class="transcription-item">
+            <div class="transcription-info">
+                <div class="transcription-id">${item.id}</div>
+                <div class="transcription-filename">${item.filename}</div>
+                <div class="transcription-time">${item.transcribed_time}</div>
+            </div>
+            <div class="transcription-actions">
+                <button class="view-btn" onclick="viewTranscription(${item.id}, '${item.filename}')">view</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function viewTranscription(id, filename) {
+    try {
+        const response = await fetch(`/api/transcriptions/${id}`);
+        const data = await response.json();
+        
+        if (data.content) {
+            document.getElementById('modal-title').textContent = filename;
+            document.getElementById('modal-content').textContent = data.content;
+            document.getElementById('transcription-modal').style.display = 'block';
+        }
+        
+    } catch (error) {
+        console.error('error loading transcription content:', error);
+        updateStatus(`error loading transcription: ${error.message}`);
+    }
+}
+
+function closeModal() {
+    document.getElementById('transcription-modal').style.display = 'none';
+}
+
+// close modal when clicking outside
+window.addEventListener('click', function(event) {
+    const modal = document.getElementById('transcription-modal');
+    if (event.target === modal) {
+        closeModal();
+    }
+});
 
 // cleanup on page unload
 window.addEventListener('beforeunload', () => {

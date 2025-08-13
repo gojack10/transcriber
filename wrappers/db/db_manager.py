@@ -54,6 +54,32 @@ class TranscriptionDB:
         except Exception as e:
             print(f"error getting transcription: {e}")
             return None
+    
+    def get_all_transcriptions(self, sort_by: str = "id", sort_order: str = "desc"):
+        try:
+            valid_columns = ["id", "filename"]
+            valid_orders = ["asc", "desc"]
+            
+            if sort_by not in valid_columns:
+                sort_by = "id"
+            if sort_order not in valid_orders:
+                sort_order = "desc"
+                
+            with self.get_connection() as conn:
+                cursor = conn.execute(f"""
+                SELECT id, filename, transcribed_time, queue_item_id FROM transcriptions 
+                ORDER BY {sort_by} {sort_order.upper()};""")
+                rows = cursor.fetchall()
+                
+                return [{
+                    'id': row[0],
+                    'filename': row[1], 
+                    'transcribed_time': row[2],
+                    'queue_item_id': row[3]
+                } for row in rows]
+        except Exception as e:
+            print(f"error getting all transcriptions: {e}")
+            return []
         
     @contextmanager
     def get_connection(self):

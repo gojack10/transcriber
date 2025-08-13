@@ -11,12 +11,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wrappers.media_manager import conversion_queue, download_audio, convert_to_audio
 from wrappers.queue_manager import QueueStatus
+from wrappers.db.db_manager import TranscriptionDB
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024 
 app.config['UPLOAD_FOLDER'] = '/home/jack/llm/transcription/.temp'
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+db = TranscriptionDB()
 
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm', 'mp3', 'wav', 'ogg', 'm4a'}
 
@@ -186,6 +188,41 @@ def remove_queue_item(item_id):
                 'error': f'item cannot be cancelled or removed (status: {item.status.value})'
             }), 400
         
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/transcriptions', methods=['GET'])
+def get_transcriptions():
+    try:
+        sort_by = request.args.get('sort_by', 'id')
+        sort_order = request.args.get('sort_order', 'desc')
+        
+        transcriptions = db.get_all_transcriptions(sort_by, sort_order)
+        
+        return jsonify({
+            'transcriptions': transcriptions,
+            'total_count': len(transcriptions)
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/transcriptions/<int:transcription_id>', methods=['GET'])
+def get_transcription_content(transcription_id):
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.execute("""
+            SELECT filename, content FROM transcriptions WHERE id = ?;""", (transcription_id,))
+            row = cursor.fetchone()
+            
+            if not row:
+                return jsonify({'error': 'transcription not found'}), 404
+                
+            return jsonify({
+                'filename': row[0],
+                'content': row[1]
+            })
+            
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

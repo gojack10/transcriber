@@ -14,3 +14,4 @@ video_queue.json
 plan.md
 .env
 todo.md
+*.db

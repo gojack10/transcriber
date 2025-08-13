@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from wrappers.media_manager import conversion_queue, TEST_async_convert_all_media
 from wrappers.queue_manager import QueueStatus
+from wrappers.db.db_manager import TranscriptionDB
 
 class TranscriptionOrchestrator:
     def __init__(self):
@@ -19,6 +20,7 @@ class TranscriptionOrchestrator:
         self.model_pool = []
         self.pool_lock = threading.Lock()
         self.worker_threads = []
+        self.db = TranscriptionDB()
         
     def create_whisper_model(self) -> WhisperModel:
         """create a new faster-whisper model instance on gpu"""
@@ -63,6 +65,7 @@ Text length: {len(transcription_text)} characters
                 f.write(header)
                 f.write(transcription_text)
             
+            self.db.add_transcription(output_filename, transcription_text, item.id)
             item.update_status(QueueStatus.COMPLETED)
             print(f"transcription saved to: {output_filename}")
             
