@@ -1,6 +1,6 @@
 import time
 # STATS_MONITORING_IMPLEMENTATION - comment out these 2 lines to disable stats
-from wrappers.transcription_statistics import start_stats_monitoring, stop_stats_monitoring
+# from wrappers.transcription_statistics import start_stats_monitoring, stop_stats_monitoring
 from faster_whisper import WhisperModel
 import torch
 import gc
@@ -81,10 +81,8 @@ Text length: {len(transcription_text)} characters
         }
         
         while True:
-            # remove finished worker threads
             self.worker_threads = [t for t in self.worker_threads if t.is_alive()]
 
-            # fill available worker slots
             available_slots = self.max_workers - len(self.worker_threads)
             if available_slots > 0:
                 converted_items = conversion_queue.get_all_items_by_status(QueueStatus.CONVERTED)
@@ -94,7 +92,6 @@ Text length: {len(transcription_text)} characters
                 while available_slots > 0 and ready_items:
                     item = ready_items.pop(0)
 
-                    # get or create a free model from the pool
                     with self.pool_lock:
                         free_idx = None
                         for idx, entry in enumerate(self.model_pool):
@@ -111,10 +108,8 @@ Text length: {len(transcription_text)} characters
                             model_to_use = self.model_pool[free_idx]["model"]
                             model_idx = free_idx
                         else:
-                            # no free model available
                             break
 
-                    # start a worker thread to transcribe this item
                     def worker(itm, mdl_idx, mdl):
                         try:
                             self.transcribe_file(itm, mdl)
@@ -127,7 +122,6 @@ Text length: {len(transcription_text)} characters
                     self.worker_threads.append(t)
                     available_slots -= 1
 
-            # idle maintenance
             any_active = any(
                 conversion_queue.get_all_items_by_status(s) for s in active_statuses
             ) or bool(self.worker_threads)
@@ -159,7 +153,7 @@ def trigger_media_processing():
 
 if __name__ == "__main__":
     # STATS_MONITORING_IMPLEMENTATION - comment out this line to disable stats
-    start_stats_monitoring("orchestrator_dual_worker")
+    # start_stats_monitoring("orchestrator_dual_worker")
     
     media_threads = trigger_media_processing()
     
@@ -176,5 +170,5 @@ if __name__ == "__main__":
                 thread.join(timeout=5)
     
     # STATS_MONITORING_IMPLEMENTATION - comment out this line to disable stats
-    stop_stats_monitoring()
+    # stop_stats_monitoring()
 
