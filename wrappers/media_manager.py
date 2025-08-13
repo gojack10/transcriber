@@ -94,6 +94,7 @@ def download_audio(yt_link, on_complete=None):
     ], capture_output=True, text=True)
     
     if download_output.returncode != 0:
+        conversion_queue.get_item(item_id).mark_failed(download_output.stdout + download_output.stderr)
         if on_complete:
             on_complete(False, download_output.stdout + download_output.stderr, None)
         return download_output.stdout + download_output.stderr
@@ -101,6 +102,7 @@ def download_audio(yt_link, on_complete=None):
     opus_files = glob.glob(f"{temp_dir}/*.opus")
     if not opus_files:
         error_msg = "no opus file found after download"
+        conversion_queue.get_item(item_id).mark_failed(error_msg)
         if on_complete:
             on_complete(False, error_msg, None)
         return error_msg
@@ -129,6 +131,8 @@ def download_audio(yt_link, on_complete=None):
         conversion_queue.update_item_path(item_id, ogg_file)
         conversion_queue.get_item(item_id).update_status(QueueStatus.CONVERTED)
         print(f"Converted {opus_file} to {ogg_file}. \n\nQueueManager: {conversion_queue.get_all_items()}")
+    else:
+        conversion_queue.get_item(item_id).mark_failed(convert_output.stdout + convert_output.stderr)
 
     if os.path.exists(opus_file):
         os.remove(opus_file)
@@ -183,6 +187,8 @@ def convert_to_audio(file_path, file_name=None, on_complete=None):
         conversion_queue.update_item_path(item_id, output_path)
         conversion_queue.get_item(item_id).update_status(QueueStatus.CONVERTED)
         print(f"Converted {file_path} to {output_path}. \n\nQueueManager: {conversion_queue.get_all_items()}")
+    else:
+        conversion_queue.get_item(item_id).mark_failed(output.stdout + output.stderr)
     
     if on_complete:
         on_complete(output.returncode == 0, output.stdout + output.stderr, output_path)

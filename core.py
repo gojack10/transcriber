@@ -60,21 +60,29 @@ Text length: {len(transcription_text)} characters
     
     def run_orchestration(self):
         """main orchestration loop - process one file at a time"""
-        print("starting transcription orchestrator...")
+        
+        active_statuses = {
+            QueueStatus.QUEUED,
+            QueueStatus.DOWNLOADING,
+            QueueStatus.CONVERTING,
+            QueueStatus.TRANSCRIBING,
+        }
         
         while True:
             converted_items = conversion_queue.get_all_items_by_status(QueueStatus.CONVERTED)
             skipped_items = conversion_queue.get_all_items_by_status(QueueStatus.SKIPPED)
-            
             ready_items = converted_items + skipped_items
             
             if ready_items:
-                item = ready_items[0]
-                self.transcribe_file(item)
+                self.transcribe_file(ready_items[0])
             else:
-                print("waiting for converted files...")
+                any_active = any(
+                    conversion_queue.get_all_items_by_status(s) for s in active_statuses
+                )    
+                if not any_active and self.model is not None:
+                    self.cleanup()
                 time.sleep(2)
-    
+
     def cleanup(self):
         """cleanup whisper model from memory"""
         if self.model is not None:
