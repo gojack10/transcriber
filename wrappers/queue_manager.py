@@ -7,9 +7,11 @@ class QueueStatus(Enum):
     QUEUED = "queued"
     DOWNLOADING = "downloading"
     CONVERTING = "converting"
+    CONVERTED = "converted"
     TRANSCRIBING = "transcribing"
     COMPLETED = "completed"
     FAILED = "failed"
+    SKIPPED = "skipped"
 
 class QueueItem:
     id: str
