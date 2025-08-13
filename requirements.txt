@@ -1,2 +1,6 @@
-openai-whisper
 torch
+psutil
+ctranslate2
+faster-whisper
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*
