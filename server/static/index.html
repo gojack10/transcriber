@@ -12,7 +12,6 @@
             <h1>transcription automation</h1>
             <div class="status-bar">
                 <span id="status-text">loading...</span>
-                <button id="refresh-btn" onclick="refreshStatus()">refresh</button>
             </div>
         </header>
 
@@ -34,6 +33,9 @@
                         </div>
                         <input type="file" id="file-input" multiple accept=".mp4,.avi,.mov,.mkv,.webm,.mp3,.wav,.ogg,.m4a">
                     </div>
+                    <div id="upload-progress" class="upload-progress" style="display: none;">
+                        <!-- upload progress items will be shown here -->
+                    </div>
                 </section>
 
                 <!-- url input section -->
@@ -43,11 +45,29 @@
                         <input type="url" id="url-input" placeholder="paste youtube or other supported url...">
                         <button id="add-url-btn" onclick="addUrl()">add to queue</button>
                     </div>
+                    <div id="url-progress" class="url-progress" style="display: none;">
+                        <!-- url processing progress will be shown here -->
+                    </div>
                 </section>
 
                 <!-- queue display -->
                 <section class="queue-section">
-                    <h2>queue status</h2>
+                    <div class="queue-header">
+                        <h2>queue status</h2>
+                        <div class="queue-sort-controls">
+                            <label>sort by:</label>
+                            <select id="queue-sort-by" onchange="refreshStatus()">
+                                <option value="updated_at">updated</option>
+                                <option value="created_at">created</option>
+                                <option value="status">status</option>
+                                <option value="file_path">name</option>
+                            </select>
+                            <select id="queue-sort-order" onchange="refreshStatus()">
+                                <option value="desc">descending</option>
+                                <option value="asc">ascending</option>
+                            </select>
+                        </div>
+                    </div>
                     <div class="queue-stats" id="queue-stats">
                         <!-- status counts will be populated here -->
                     </div>
@@ -61,7 +81,10 @@
             <div id="transcriptions-tab" class="tab-content">
                 <section class="transcriptions-section">
                     <div class="transcriptions-header">
-                        <h2>transcriptions</h2>
+                        <div class="transcriptions-title">
+                            <h2>transcriptions</h2>
+                            <span id="transcriptions-count" class="transcriptions-count">0 total</span>
+                        </div>
                         <div class="sort-controls">
                             <label>sort by:</label>
                             <select id="sort-by" onchange="loadTranscriptions()">

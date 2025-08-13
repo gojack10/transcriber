@@ -51,14 +51,36 @@ function initializeEventListeners() {
 }
 
 async function handleFiles(files) {
+    const progressContainer = document.getElementById('upload-progress');
+    progressContainer.style.display = 'block';
+    
     for (const file of files) {
         await uploadFile(file);
     }
+    
+    // hide progress after a delay
+    setTimeout(() => {
+        progressContainer.style.display = 'none';
+        progressContainer.innerHTML = '';
+    }, 3000);
 }
 
 async function uploadFile(file) {
     const formData = new FormData();
     formData.append('file', file);
+    
+    const progressContainer = document.getElementById('upload-progress');
+    const progressId = `upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // add progress item
+    const progressItem = document.createElement('div');
+    progressItem.className = 'progress-item';
+    progressItem.id = progressId;
+    progressItem.innerHTML = `
+        <div class="progress-filename">${file.name}</div>
+        <div class="progress-status uploading">uploading...</div>
+    `;
+    progressContainer.appendChild(progressItem);
     
     try {
         updateStatus(`uploading ${file.name}...`);
@@ -70,14 +92,23 @@ async function uploadFile(file) {
         
         const result = await response.json();
         
+        const statusElement = progressItem.querySelector('.progress-status');
+        
         if (result.success) {
             updateStatus(`${file.name} uploaded successfully`);
+            statusElement.textContent = 'success';
+            statusElement.className = 'progress-status success';
             refreshStatus();
         } else {
             updateStatus(`upload failed: ${result.error}`);
+            statusElement.textContent = `failed: ${result.error}`;
+            statusElement.className = 'progress-status error';
         }
     } catch (error) {
         updateStatus(`upload error: ${error.message}`);
+        const statusElement = progressItem.querySelector('.progress-status');
+        statusElement.textContent = `error: ${error.message}`;
+        statusElement.className = 'progress-status error';
     }
 }
 
@@ -89,6 +120,20 @@ async function addUrl() {
         updateStatus('please enter a url');
         return;
     }
+    
+    const progressContainer = document.getElementById('url-progress');
+    const progressId = `url-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // show progress and add item
+    progressContainer.style.display = 'block';
+    const progressItem = document.createElement('div');
+    progressItem.className = 'progress-item';
+    progressItem.id = progressId;
+    progressItem.innerHTML = `
+        <div class="progress-filename">${url}</div>
+        <div class="progress-status processing">processing...</div>
+    `;
+    progressContainer.appendChild(progressItem);
     
     try {
         updateStatus(`adding url to queue...`);
@@ -103,16 +148,31 @@ async function addUrl() {
         
         const result = await response.json();
         
+        const statusElement = progressItem.querySelector('.progress-status');
+        
         if (result.success) {
             updateStatus(`url added to queue successfully`);
+            statusElement.textContent = 'added to queue';
+            statusElement.className = 'progress-status success';
             urlInput.value = '';
             refreshStatus();
         } else {
             updateStatus(`failed to add url: ${result.error}`);
+            statusElement.textContent = `failed: ${result.error}`;
+            statusElement.className = 'progress-status error';
         }
     } catch (error) {
         updateStatus(`error adding url: ${error.message}`);
+        const statusElement = progressItem.querySelector('.progress-status');
+        statusElement.textContent = `error: ${error.message}`;
+        statusElement.className = 'progress-status error';
     }
+    
+    // hide progress after delay
+    setTimeout(() => {
+        progressContainer.style.display = 'none';
+        progressContainer.innerHTML = '';
+    }, 3000);
 }
 
 async function refreshStatus() {
@@ -125,14 +185,56 @@ async function refreshStatus() {
         const statusData = await statusResponse.json();
         const itemsData = await itemsResponse.json();
         
+        // sort items based on selected criteria
+        const sortBy = document.getElementById('queue-sort-by')?.value || 'updated_at';
+        const sortOrder = document.getElementById('queue-sort-order')?.value || 'desc';
+        const sortedItems = sortQueueItems(itemsData.items, sortBy, sortOrder);
+        
         updateQueueStats(statusData);
-        updateQueueItems(itemsData.items);
+        updateQueueItems(sortedItems);
         
         updateStatus(`queue: ${statusData.total_items} items`);
         
     } catch (error) {
         updateStatus(`error refreshing: ${error.message}`);
     }
+}
+
+function sortQueueItems(items, sortBy, sortOrder) {
+    if (!items || items.length === 0) return items;
+    
+    return items.sort((a, b) => {
+        let valueA, valueB;
+        
+        switch(sortBy) {
+            case 'status':
+                valueA = a.status;
+                valueB = b.status;
+                break;
+            case 'created_at':
+                valueA = new Date(a.created_at);
+                valueB = new Date(b.created_at);
+                break;
+            case 'updated_at':
+                valueA = new Date(a.updated_at);
+                valueB = new Date(b.updated_at);
+                break;
+            case 'file_path':
+                // get filename from path or use url
+                valueA = a.file_path ? a.file_path.split('/').pop().toLowerCase() : (a.url || '').toLowerCase();
+                valueB = b.file_path ? b.file_path.split('/').pop().toLowerCase() : (b.url || '').toLowerCase();
+                break;
+            default:
+                valueA = new Date(a.updated_at);
+                valueB = new Date(b.updated_at);
+        }
+        
+        let comparison = 0;
+        if (valueA < valueB) comparison = -1;
+        if (valueA > valueB) comparison = 1;
+        
+        return sortOrder === 'desc' ? -comparison : comparison;
+    });
 }
 
 function updateQueueStats(statusData) {
@@ -278,6 +380,11 @@ async function loadTranscriptions() {
 
 function updateTranscriptionsTable(transcriptions) {
     const container = document.getElementById('transcriptions-list');
+    const countElement = document.getElementById('transcriptions-count');
+    
+    // update count
+    const count = transcriptions ? transcriptions.length : 0;
+    countElement.textContent = `${count} total`;
     
     if (!transcriptions || transcriptions.length === 0) {
         container.innerHTML = '<div style="text-align: center; color: var(--fg2); padding: 20px;">no transcriptions available</div>';
