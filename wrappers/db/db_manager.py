@@ -81,6 +81,42 @@ class TranscriptionDB:
             print(f"error getting all transcriptions: {e}")
             return []
         
+    def delete_transcription(self, transcription_id: int) -> bool:
+        """delete a single transcription by id"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("DELETE FROM transcriptions WHERE id = ?", (transcription_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            print(f"error deleting transcription {transcription_id}: {e}")
+            return False
+
+    def delete_transcriptions(self, transcription_ids: List[int]) -> int:
+        """delete multiple transcriptions by ids, returns number deleted"""
+        try:
+            if not transcription_ids:
+                return 0
+                
+            placeholders = ','.join('?' * len(transcription_ids))
+            with self.get_connection() as conn:
+                cursor = conn.execute(f"DELETE FROM transcriptions WHERE id IN ({placeholders})", transcription_ids)
+                conn.commit()
+                return cursor.rowcount
+        except Exception as e:
+            print(f"error deleting transcriptions {transcription_ids}: {e}")
+            return 0
+
+    def transcription_exists(self, filename: str) -> bool:
+        """check if a transcription with the given filename already exists"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("SELECT 1 FROM transcriptions WHERE filename = ?", (filename,))
+                return cursor.fetchone() is not None
+        except Exception as e:
+            print(f"error checking transcription existence: {e}")
+            return False
+
     @contextmanager
     def get_connection(self):
         with self._lock:

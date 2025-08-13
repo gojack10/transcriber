@@ -46,9 +46,8 @@ class TranscriptionOrchestrator:
             )
             transcription_text = "".join(s.text for s in segments)
             
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             file_stem = Path(item.file_path).stem
-            output_filename = f"{file_stem}_transcript_{timestamp}.txt"
+            output_filename = f"{file_stem}.txt"
             output_path = self.temp_dir / output_filename
             
             header = f"""Transcription of: {Path(item.file_path).name}
@@ -60,6 +59,7 @@ Text length: {len(transcription_text)} characters
 --- TRANSCRIPTION ---
 
 """
+            
             
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(header)
@@ -88,9 +88,11 @@ Text length: {len(transcription_text)} characters
 
             available_slots = self.max_workers - len(self.worker_threads)
             if available_slots > 0:
-                converted_items = conversion_queue.get_all_items_by_status(QueueStatus.CONVERTED)
-                skipped_items = conversion_queue.get_all_items_by_status(QueueStatus.SKIPPED)
-                ready_items = converted_items + skipped_items
+                ready_items = conversion_queue.get_ready_items_for_transcription()
+                pending_duplicates = conversion_queue.get_pending_duplicates()
+                
+                if pending_duplicates:
+                    print(f"orchestrator: {len(pending_duplicates)} items pending duplicate resolution, continuing with {len(ready_items)} ready items")
 
                 while available_slots > 0 and ready_items:
                     item = ready_items.pop(0)

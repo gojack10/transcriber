@@ -292,6 +292,29 @@ h2 {
     color: var(--urgent);
 }
 
+/* upload progress bar */
+.upload-progress-bar {
+    background: var(--bg0);
+    border: 1px solid var(--accent);
+    border-radius: 0;
+    height: 4px;
+    margin-top: 4px;
+    overflow: hidden;
+}
+
+.upload-progress-fill {
+    background: var(--info);
+    height: 100%;
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.upload-progress-text {
+    font-size: 10px;
+    color: var(--fg2);
+    margin-top: 2px;
+}
+
 /* queue header */
 .queue-header {
     display: flex;
@@ -300,12 +323,36 @@ h2 {
     margin-bottom: 15px;
 }
 
+.queue-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
 .queue-sort-controls {
     display: flex;
     align-items: center;
     gap: 8px;
     font-size: 12px;
     color: var(--fg2);
+}
+
+.queue-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#queue-manage-btn {
+    background: var(--info);
+    color: var(--fg0);
+    border: 1px solid var(--info);
+    font-size: 10px;
+}
+
+#queue-manage-btn:hover {
+    background: #2980b9;
+    border-color: #2980b9;
 }
 
 .queue-sort-controls select {
@@ -399,6 +446,13 @@ h2 {
 .status-failed { background: var(--urgent); color: var(--fg0); }
 .status-skipped { background: var(--fg2); color: var(--bg0); }
 .status-cancelled { background: var(--accent); color: var(--fg1); }
+.status-pending_duplicate { background: var(--warning); color: var(--bg0); animation: pulse 2s infinite; }
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }
+}
 
 .delete-btn, .cancel-btn {
     background: var(--urgent);
@@ -433,12 +487,36 @@ h2 {
     font-weight: normal;
 }
 
+.transcriptions-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
 .sort-controls {
     display: flex;
     align-items: center;
     gap: 8px;
     font-size: 12px;
     color: var(--fg2);
+}
+
+.transcriptions-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#transcriptions-manage-btn {
+    background: var(--info);
+    color: var(--fg0);
+    border: 1px solid var(--info);
+    font-size: 10px;
+}
+
+#transcriptions-manage-btn:hover {
+    background: #2980b9;
+    border-color: #2980b9;
 }
 
 .sort-controls select {
@@ -514,6 +592,27 @@ h2 {
 .view-btn:hover {
     background: #2980b9;
     border-color: #2980b9;
+}
+
+/* checkboxes */
+.item-checkbox {
+    margin-right: 8px;
+    width: 14px;
+    height: 14px;
+    accent-color: var(--info);
+}
+
+.warning-btn {
+    background: var(--warning);
+    color: var(--bg0);
+    border: 1px solid var(--warning);
+    padding: 6px 10px;
+    font-size: 11px;
+}
+
+.warning-btn:hover {
+    background: #e67e22;
+    border-color: #e67e22;
 }
 
 /* modal */
@@ -626,6 +725,31 @@ h2 {
 
 .modal-body textarea:focus {
     border-color: var(--focus);
+}
+
+/* duplicate modal */
+.duplicate-modal-content {
+    width: 400px;
+    height: auto;
+    max-width: 90%;
+}
+
+.duplicate-filename {
+    background: var(--bg0);
+    border: 1px solid var(--accent);
+    padding: 8px;
+    margin: 12px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--fg1);
+    word-break: break-all;
+}
+
+.duplicate-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 15px;
 }
 
 /* scrollbar styling */

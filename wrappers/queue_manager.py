@@ -13,6 +13,7 @@ class QueueStatus(Enum):
     FAILED = "failed"
     SKIPPED = "skipped"
     CANCELLED = "cancelled"
+    PENDING_DUPLICATE = "pending_duplicate"
 
 class QueueItem:
     id: str
@@ -30,6 +31,7 @@ class QueueItem:
         self.created_at = datetime.now()
         self.updated_at = datetime.now()
         self.error_message = None
+        self.pending_transcription = None
 
     def update_status(self, new_status: QueueStatus, error_message: Optional[str] = None):
         self.status = new_status
@@ -84,6 +86,15 @@ class QueueManager:
     def get_all_items_by_status(self, status: QueueStatus) -> list[QueueItem]:
         return [item for item in self.queue.values() if item.status == status]
     
+    def get_ready_items_for_transcription(self) -> list[QueueItem]:
+        """get items ready for transcription, excluding pending duplicates"""
+        ready_statuses = {QueueStatus.CONVERTED, QueueStatus.SKIPPED}
+        return [item for item in self.queue.values() if item.status in ready_statuses]
+    
+    def get_pending_duplicates(self) -> list[QueueItem]:
+        """get all items pending duplicate resolution"""
+        return [item for item in self.queue.values() if item.status == QueueStatus.PENDING_DUPLICATE]
+    
     def remove_item(self, item_id: str) -> bool:
         if item_id in self.queue:
             del self.queue[item_id]
@@ -108,3 +119,29 @@ class QueueManager:
             return False
         final_states = {QueueStatus.COMPLETED, QueueStatus.FAILED, QueueStatus.CANCELLED, QueueStatus.SKIPPED}
         return item.status in final_states
+
+    def remove_items(self, item_ids: list[str]) -> dict:
+        """remove multiple items from queue, returns dict with counts"""
+        result = {
+            'removed': 0,
+            'cancelled': 0,
+            'not_found': 0,
+            'cannot_remove': 0
+        }
+        
+        for item_id in item_ids:
+            item = self.get_item(item_id)
+            if not item:
+                result['not_found'] += 1
+                continue
+            
+            if self.can_cancel_item(item_id):
+                item.update_status(QueueStatus.CANCELLED, "cancelled by user")
+                result['cancelled'] += 1
+            elif self.can_remove_item(item_id):
+                self.remove_item(item_id)
+                result['removed'] += 1
+            else:
+                result['cannot_remove'] += 1
+        
+        return result

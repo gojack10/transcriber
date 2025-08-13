@@ -54,18 +54,26 @@
                 <section class="queue-section">
                     <div class="queue-header">
                         <h2>queue status</h2>
-                        <div class="queue-sort-controls">
-                            <label>sort by:</label>
-                            <select id="queue-sort-by" onchange="refreshStatus()">
-                                <option value="updated_at">updated</option>
-                                <option value="created_at">created</option>
-                                <option value="status">status</option>
-                                <option value="file_path">name</option>
-                            </select>
-                            <select id="queue-sort-order" onchange="refreshStatus()">
-                                <option value="desc">descending</option>
-                                <option value="asc">ascending</option>
-                            </select>
+                        <div class="queue-controls">
+                            <div class="queue-sort-controls">
+                                <label>sort by:</label>
+                                <select id="queue-sort-by" onchange="refreshStatus()">
+                                    <option value="updated_at">updated</option>
+                                    <option value="created_at">created</option>
+                                    <option value="status">status</option>
+                                    <option value="file_path">name</option>
+                                </select>
+                                <select id="queue-sort-order" onchange="refreshStatus()">
+                                    <option value="desc">descending</option>
+                                    <option value="asc">ascending</option>
+                                </select>
+                            </div>
+                            <div class="queue-actions" id="queue-actions" style="display: none;">
+                                <button id="queue-select-all" onclick="toggleSelectAllQueue()">select all</button>
+                                <button id="queue-delete-selected" onclick="deleteSelectedQueueItems()" class="delete-btn">remove selected</button>
+                                <button id="queue-cancel-selection" onclick="cancelQueueSelection()">cancel</button>
+                            </div>
+                            <button id="queue-manage-btn" onclick="toggleQueueManagement()">manage</button>
                         </div>
                     </div>
                     <div class="queue-stats" id="queue-stats">
@@ -85,16 +93,24 @@
                             <h2>transcriptions</h2>
                             <span id="transcriptions-count" class="transcriptions-count">0 total</span>
                         </div>
-                        <div class="sort-controls">
-                            <label>sort by:</label>
-                            <select id="sort-by" onchange="loadTranscriptions()">
-                                <option value="id">id</option>
-                                <option value="filename">filename</option>
-                            </select>
-                            <select id="sort-order" onchange="loadTranscriptions()">
-                                <option value="desc">descending</option>
-                                <option value="asc">ascending</option>
-                            </select>
+                        <div class="transcriptions-controls">
+                            <div class="sort-controls">
+                                <label>sort by:</label>
+                                <select id="sort-by" onchange="loadTranscriptions()">
+                                    <option value="id">id</option>
+                                    <option value="filename">filename</option>
+                                </select>
+                                <select id="sort-order" onchange="loadTranscriptions()">
+                                    <option value="desc">descending</option>
+                                    <option value="asc">ascending</option>
+                                </select>
+                            </div>
+                            <div class="transcriptions-actions" id="transcriptions-actions" style="display: none;">
+                                <button id="transcriptions-select-all" onclick="toggleSelectAllTranscriptions()">select all</button>
+                                <button id="transcriptions-delete-selected" onclick="deleteSelectedTranscriptions()" class="delete-btn">delete selected</button>
+                                <button id="transcriptions-cancel-selection" onclick="cancelTranscriptionsSelection()">cancel</button>
+                            </div>
+                            <button id="transcriptions-manage-btn" onclick="toggleTranscriptionsManagement()">manage</button>
                         </div>
                     </div>
                     <div class="transcriptions-table" id="transcriptions-list">
@@ -118,6 +134,23 @@
             <div class="modal-body">
                 <div class="transcription-container">
                     <textarea id="modal-content" readonly></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- duplicate confirmation modal -->
+    <div id="duplicate-modal" class="modal">
+        <div class="modal-content duplicate-modal-content">
+            <div class="modal-header">
+                <h3>duplicate filename detected</h3>
+            </div>
+            <div class="modal-body">
+                <p id="duplicate-message">a transcription with this filename already exists. what would you like to do?</p>
+                <div class="duplicate-filename" id="duplicate-filename"></div>
+                <div class="duplicate-actions">
+                    <button id="duplicate-overwrite" class="warning-btn">overwrite existing</button>
+                    <button id="duplicate-cancel" onclick="closeDuplicateModal()">cancel upload</button>
                 </div>
             </div>
         </div>
