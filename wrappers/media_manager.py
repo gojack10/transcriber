@@ -2,6 +2,7 @@ import subprocess
 import os
 import glob
 import re
+import threading
 from pathlib import Path
 from wrappers.queue_manager import QueueManager, QueueStatus
 
@@ -194,3 +195,41 @@ def convert_to_audio(file_path, file_name=None, on_complete=None):
         on_complete(output.returncode == 0, output.stdout + output.stderr, output_path)
 
     return output.stdout + output.stderr
+
+# TEST FUNCTIONS - for automatic file discovery in .temp directory
+def TEST_get_all_media_files(temp_dir="/home/jack/llm/transcription/.temp"):
+    """get all .mp4 and .ogg files in temp directory for testing"""
+    temp_path = Path(temp_dir)
+    if not temp_path.exists():
+        return []
+    
+    mp4_files = list(temp_path.glob("*.mp4"))
+    ogg_files = list(temp_path.glob("*.ogg"))
+    
+    all_files = mp4_files + ogg_files
+    return [str(f) for f in all_files]
+
+def TEST_async_convert_all_media():
+    """async wrapper to convert all media files found in .temp directory"""
+    media_files = TEST_get_all_media_files()
+    
+    if not media_files:
+        print("no media files found in .temp directory")
+        return []
+    
+    threads = []
+    for file_path in media_files:
+        # only convert mp4 files, skip ogg files as they're already converted
+        if file_path.endswith('.mp4'):
+            def convert_task(fp=file_path):
+                convert_to_audio(fp, on_complete=lambda success, output, file_path: 
+                                print(f"test convert complete: {success} - {file_path}"))
+            
+            thread = threading.Thread(target=convert_task, daemon=True)
+            thread.start()
+            threads.append(thread)
+            print(f"started conversion for: {file_path}")
+        else:
+            print(f"skipping already converted file: {file_path}")
+    
+    return threads

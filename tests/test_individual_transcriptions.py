@@ -5,24 +5,15 @@ from uuid import uuid4
 from wrappers.transcription_statistics import start_stats_monitoring, stop_stats_monitoring
 
 from wrappers.media_manager import (
-    download_audio,
+    TEST_get_all_media_files,
     convert_to_audio,
-    check_file_exists,
     check_local_file_exists,
 )
 from wrappers.queue_manager import QueueItem, QueueStatus
 from core import TranscriptionOrchestrator
 
 
-# automatically discover all media files in temp directory
-import glob
-
-def get_all_media_files():
-    """get all .mp4 and .ogg files from temp directory"""
-    temp_dir = "/home/jack/llm/transcription/.temp"
-    mp4_files = glob.glob(f"{temp_dir}/*.mp4") 
-    ogg_files = glob.glob(f"{temp_dir}/*.ogg")
-    return mp4_files, ogg_files
+# removed hardcoded links and paths - now using TEST_get_all_media_files()
 
 
 def make_item(file_path: str) -> QueueItem:
@@ -52,6 +43,21 @@ def ensure_audio_from_local(mp4_path: str) -> str:
         raise RuntimeError(f"failed to locate converted ogg for {mp4_path}")
     return ogg_path
 
+def get_all_audio_files() -> list[str]:
+    """get all available audio files for testing"""
+    media_files = TEST_get_all_media_files()
+    
+    # convert any mp4 files to ogg first
+    mp4_files = [f for f in media_files if f.endswith('.mp4')]
+    for mp4_file in mp4_files:
+        ensure_audio_from_local(mp4_file)
+    
+    # get all ogg files (including newly converted ones)
+    updated_files = TEST_get_all_media_files()
+    ogg_files = [f for f in updated_files if f.endswith('.ogg')]
+    
+    return ogg_files
+
 
 def main():
     # STATS_MONITORING_IMPLEMENTATION - comment out this line to disable stats
@@ -60,40 +66,28 @@ def main():
     orchestrator = TranscriptionOrchestrator()
     model = orchestrator.create_whisper_model()
 
-    mp4_files, ogg_files = get_all_media_files()
     results = []
 
-    # process all mp4 files (convert then transcribe)
-    for i, mp4_path in enumerate(mp4_files):
-        print(f"\nprocessing mp4 file {i+1}/{len(mp4_files)}: {mp4_path}")
-        try:
-            ogg_path = ensure_audio_from_local(mp4_path)
-            duration = transcribe_one(orchestrator, model, ogg_path)
-            results.append((f"mp4_file_{i+1}", ogg_path, duration))
-        except Exception as e:
-            print(f"error processing {mp4_path}: {e}")
-            results.append((f"mp4_file_{i+1}_FAILED", mp4_path, 0))
-
-    # process all existing ogg files (transcribe directly)
-    for i, ogg_path in enumerate(ogg_files):
-        print(f"\nprocessing ogg file {i+1}/{len(ogg_files)}: {ogg_path}")
-        try:
-            duration = transcribe_one(orchestrator, model, ogg_path)
-            results.append((f"ogg_file_{i+1}", ogg_path, duration))
-        except Exception as e:
-            print(f"error processing {ogg_path}: {e}")
-            results.append((f"ogg_file_{i+1}_FAILED", ogg_path, 0))
+    # get all audio files from .temp directory
+    audio_files = get_all_audio_files()
+    
+    if not audio_files:
+        print("no audio files found in .temp directory")
+        return
+    
+    print(f"found {len(audio_files)} audio files to transcribe")
+    
+    # transcribe each file individually
+    for i, audio_file in enumerate(audio_files):
+        file_name = Path(audio_file).name
+        duration = transcribe_one(orchestrator, model, audio_file)
+        results.append((f"file_{i+1}_{file_name}", audio_file, duration))
 
     orchestrator.cleanup()
 
-    print(f"\nindividual transcription timings for {len(mp4_files)} mp4s + {len(ogg_files)} oggs:")
-    total_time = 0
+    print("\nindividual transcription timings (seconds):")
     for label, path, secs in results:
-        print(f"- {label}: {secs:.2f}s -> {Path(path).name}")
-        if not label.endswith("_FAILED"):
-            total_time += secs
-    
-    print(f"\ntotal processing time: {total_time:.2f}s")
+        print(f"- {label}: {secs:.2f}s -> {path}")
     
     # STATS_MONITORING_IMPLEMENTATION - comment out this line to disable stats
     stop_stats_monitoring()

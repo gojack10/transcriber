@@ -7,7 +7,7 @@ import gc
 import threading
 from datetime import datetime
 from pathlib import Path
-from wrappers.media_manager import conversion_queue, download_audio, convert_to_audio
+from wrappers.media_manager import conversion_queue, TEST_async_convert_all_media
 from wrappers.queue_manager import QueueStatus
 
 class TranscriptionOrchestrator:
@@ -15,7 +15,7 @@ class TranscriptionOrchestrator:
         self.model = None
         self.model_id = "base.en"
         self.temp_dir = Path("/home/jack/llm/transcription/.temp")
-        self.max_workers = 2
+        self.max_workers = 3
         self.model_pool = []
         self.pool_lock = threading.Lock()
         self.worker_threads = []
@@ -146,41 +146,16 @@ Text length: {len(transcription_text)} characters
             torch.cuda.empty_cache()
         print("model unloaded from memory")
 
-link = "https://youtu.be/HQKZZz1dGBw"
-video_path = "/home/jack/llm/transcription/.temp/testing_vid.mp4"
-video_path2 = "/home/jack/llm/transcription/.temp/Marcus Aurelius' Meditations： The Stoic Ideal [Auuk1y4DRgk].mp4"
-
-def async_download_audio(link):
-    """async wrapper for download_audio"""
-    def download_task():
-        download_audio(link, on_complete=lambda success, output, file_path: 
-                      print(f"download complete: {success} - {file_path}"))
-    
-    thread = threading.Thread(target=download_task, daemon=True)
-    thread.start()
-    return thread
-
-def async_convert_audio(video_path):
-    """async wrapper for convert_to_audio"""
-    def convert_task():
-        convert_to_audio(video_path, on_complete=lambda success, output, file_path: 
-                        print(f"convert complete: {success} - {file_path}"))
-    
-    thread = threading.Thread(target=convert_task, daemon=True)
-    thread.start()
-    return thread
-
 def trigger_media_processing():
-    """trigger downloads and conversions asynchronously"""
+    """trigger conversion of all media files found in .temp directory"""
     print("triggering async media processing...")
     
-    download_thread = async_download_audio(link)
-    convert_thread = async_convert_audio(video_path) and async_convert_audio(video_path2)
+    media_threads = TEST_async_convert_all_media()
     
     print("media processing started in background")
     print(f"initial queue status: {conversion_queue.get_all_items()}")
     
-    return [download_thread, convert_thread]
+    return media_threads
 
 if __name__ == "__main__":
     # STATS_MONITORING_IMPLEMENTATION - comment out this line to disable stats
