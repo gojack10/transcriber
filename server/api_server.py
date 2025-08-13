@@ -158,20 +158,33 @@ def get_queue_items():
 
 @app.route('/api/queue/item/<item_id>', methods=['DELETE'])
 def remove_queue_item(item_id):
-    """remove item from queue (note: this is basic - doesn't stop active processing)"""
+    """cancel active items or remove finished items from queue"""
     try:
         item = conversion_queue.get_item(item_id)
         if not item:
             return jsonify({'error': 'item not found'}), 404
         
-        # basic removal - just mark as cancelled
-        # note: for production would need more sophisticated cancellation
-        item.update_status(QueueStatus.FAILED, "cancelled by user")
+        # check if item can be cancelled (active processing)
+        if conversion_queue.can_cancel_item(item_id):
+            item.update_status(QueueStatus.CANCELLED, "cancelled by user")
+            return jsonify({
+                'success': True,
+                'action': 'cancelled',
+                'message': f'item {item_id} cancelled'
+            })
         
-        return jsonify({
-            'success': True,
-            'message': f'item {item_id} marked as cancelled'
-        })
+        elif conversion_queue.can_remove_item(item_id):
+            conversion_queue.remove_item(item_id)
+            return jsonify({
+                'success': True,
+                'action': 'removed', 
+                'message': f'item {item_id} removed from queue'
+            })
+        
+        else:
+            return jsonify({
+                'error': f'item cannot be cancelled or removed (status: {item.status.value})'
+            }), 400
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500

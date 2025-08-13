@@ -139,7 +139,8 @@ function updateQueueStats(statusData) {
         { label: 'converting', value: statusData.status_counts.converting || 0 },
         { label: 'transcribing', value: statusData.status_counts.transcribing || 0 },
         { label: 'completed', value: statusData.status_counts.completed || 0 },
-        { label: 'failed', value: statusData.status_counts.failed || 0 }
+        { label: 'failed', value: statusData.status_counts.failed || 0 },
+        { label: 'cancelled', value: statusData.status_counts.cancelled || 0 }
     ];
     
     statsContainer.innerHTML = stats.map(stat => `
@@ -162,6 +163,21 @@ function updateQueueItems(items) {
         const fileName = item.file_path ? item.file_path.split('/').pop() : item.url;
         const timeAgo = getTimeAgo(new Date(item.updated_at));
         
+        // determine button text and style based on status
+        const activeStates = ['queued', 'downloading', 'converting', 'transcribing'];
+        const finishedStates = ['completed', 'failed', 'cancelled', 'skipped'];
+        
+        let buttonText = 'remove';
+        let buttonClass = 'delete-btn';
+        
+        if (activeStates.includes(item.status)) {
+            buttonText = 'cancel';
+            buttonClass = 'cancel-btn';
+        } else if (finishedStates.includes(item.status)) {
+            buttonText = 'remove';
+            buttonClass = 'delete-btn';
+        }
+        
         return `
             <div class="queue-item">
                 <div class="item-info">
@@ -174,7 +190,7 @@ function updateQueueItems(items) {
                 </div>
                 <div class="item-status status-${item.status}">${item.status}</div>
                 <div class="item-actions">
-                    <button class="delete-btn" onclick="removeItem('${item.id}')">remove</button>
+                    <button class="${buttonClass}" onclick="removeItem('${item.id}')">${buttonText}</button>
                 </div>
             </div>
         `;
@@ -190,13 +206,14 @@ async function removeItem(itemId) {
         const result = await response.json();
         
         if (result.success) {
-            updateStatus('item removed');
+            const action = result.action || 'updated';
+            updateStatus(`item ${action} successfully`);
             refreshStatus();
         } else {
-            updateStatus(`failed to remove item: ${result.error}`);
+            updateStatus(`failed: ${result.error}`);
         }
     } catch (error) {
-        updateStatus(`error removing item: ${error.message}`);
+        updateStatus(`error: ${error.message}`);
     }
 }
 

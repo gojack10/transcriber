@@ -12,6 +12,7 @@ class QueueStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    CANCELLED = "cancelled"
 
 class QueueItem:
     id: str
@@ -82,3 +83,28 @@ class QueueManager:
     
     def get_all_items_by_status(self, status: QueueStatus) -> list[QueueItem]:
         return [item for item in self.queue.values() if item.status == status]
+    
+    def remove_item(self, item_id: str) -> bool:
+        if item_id in self.queue:
+            del self.queue[item_id]
+            if item_id in self.processing_order:
+                self.processing_order.remove(item_id)
+            print(f"removed item {item_id} from queue")
+            return True
+        return False
+    
+    def can_cancel_item(self, item_id: str) -> bool:
+        """check if item can be cancelled (is in active processing states)"""
+        item = self.get_item(item_id)
+        if not item:
+            return False
+        active_states = {QueueStatus.QUEUED, QueueStatus.DOWNLOADING, QueueStatus.CONVERTING, QueueStatus.TRANSCRIBING}
+        return item.status in active_states
+    
+    def can_remove_item(self, item_id: str) -> bool:
+        """check if item can be removed (is in final states)"""
+        item = self.get_item(item_id)
+        if not item:
+            return False
+        final_states = {QueueStatus.COMPLETED, QueueStatus.FAILED, QueueStatus.CANCELLED, QueueStatus.SKIPPED}
+        return item.status in final_states
