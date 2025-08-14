@@ -5,13 +5,7 @@ import { ApiService } from '../services/api.js';
 
 export class TranscriptionsModule {
     static init() {
-        // bind event listeners for transcriptions controls
-        document.getElementById('transcriptions-manage-btn').addEventListener('click', () => this.toggleManagement());
-        document.getElementById('transcriptions-select-all').addEventListener('click', () => this.toggleSelectAll());
-        document.getElementById('transcriptions-delete-selected').addEventListener('click', () => this.deleteSelected());
-        document.getElementById('transcriptions-cancel-selection').addEventListener('click', () => this.toggleManagement());
-        
-        // sort controls
+        // only bind sort controls - management buttons use onclick handlers
         document.getElementById('sort-by').addEventListener('change', () => this.loadTranscriptions());
         document.getElementById('sort-order').addEventListener('change', () => this.loadTranscriptions());
     }
@@ -48,18 +42,15 @@ export class TranscriptionsModule {
         
         container.innerHTML = transcriptions.map(item => {
             const checkboxHtml = APP_STATE.transcriptionsManagementMode ? 
-                `<input type="checkbox" class="item-checkbox" onchange="TranscriptionsModule.toggleItemSelection(${item.id})" ${APP_STATE.selectedTranscriptions.has(item.id) ? 'checked' : ''}>` : '';
+                `<input type="checkbox" class="item-checkbox" onchange="TranscriptionsModule.toggleItemSelection(${item.id})" onclick="event.stopPropagation()" ${APP_STATE.selectedTranscriptions.has(item.id) ? 'checked' : ''}>` : '';
             
             return `
-                <div class="transcription-item">
+                <div class="transcription-item" ${!APP_STATE.transcriptionsManagementMode ? `onclick="TranscriptionsModule.viewTranscription(${item.id}, '${item.filename}')" style="cursor: pointer;"` : ''}>
                     ${checkboxHtml}
                     <div class="transcription-info">
                         <div class="transcription-id">${item.id}</div>
                         <div class="transcription-filename">${item.filename}</div>
                         <div class="transcription-time">${item.transcribed_time}</div>
-                    </div>
-                    <div class="transcription-actions">
-                        ${APP_STATE.transcriptionsManagementMode ? '' : `<button class="view-btn" onclick="TranscriptionsModule.viewTranscription(${item.id}, '${item.filename}')">view</button>`}
                     </div>
                 </div>
             `;

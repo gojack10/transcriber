@@ -5,13 +5,7 @@ import { ApiService } from '../services/api.js';
 
 export class QueueModule {
     static init() {
-        // bind event listeners for queue controls
-        document.getElementById('queue-manage-btn').addEventListener('click', () => this.toggleManagement());
-        document.getElementById('queue-select-all').addEventListener('click', () => this.toggleSelectAll());
-        document.getElementById('queue-delete-selected').addEventListener('click', () => this.deleteSelected());
-        document.getElementById('queue-cancel-selection').addEventListener('click', () => this.toggleManagement());
-        
-        // sort controls
+        // only bind sort controls - management buttons use onclick handlers
         document.getElementById('queue-sort-by').addEventListener('change', () => this.refreshStatus());
         document.getElementById('queue-sort-order').addEventListener('change', () => this.refreshStatus());
     }

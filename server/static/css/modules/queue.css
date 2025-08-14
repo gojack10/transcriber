@@ -31,7 +31,8 @@
     background: var(--info);
     color: var(--fg0);
     border: 1px solid var(--info);
-    font-size: 10px;
+    font-size: 11px;
+    padding: 4px 6px;
 }
 
 #queue-manage-btn:hover {
@@ -113,24 +114,24 @@
 }
 
 .item-status {
-    padding: 3px 6px;
-    font-size: 10px;
+    padding: 4px 6px;
+    font-size: 11px;
     font-weight: 500;
     text-transform: uppercase;
     margin-right: 8px;
 }
 
 /* status colors */
-.status-queued { background: var(--warning); color: var(--bg0); }
-.status-downloading { background: var(--info); color: var(--bg0); }
-.status-converting { background: #9b59b6; color: var(--bg0); }
-.status-converted { background: var(--success); color: var(--bg0); }
-.status-transcribing { background: #e67e22; color: var(--bg0); }
-.status-completed { background: var(--success); color: var(--bg0); }
-.status-failed { background: var(--urgent); color: var(--fg0); }
-.status-skipped { background: var(--fg2); color: var(--bg0); }
-.status-cancelled { background: var(--accent); color: var(--fg1); }
-.status-pending_duplicate { background: var(--warning); color: var(--bg0); animation: pulse 2s infinite; }
+.status-queued { background: var(--warning); color: white; }
+.status-downloading { background: var(--info); color: white; }
+.status-converting { background: #9b59b6; color: white; }
+.status-converted { background: var(--success); color: white; }
+.status-transcribing { background: #e67e22; color: white; }
+.status-completed { background: var(--success); color: white; }
+.status-failed { background: var(--urgent); color: white; }
+.status-skipped { background: var(--fg2); color: white; }
+.status-cancelled { background: var(--accent); color: white; }
+.status-pending_duplicate { background: var(--warning); color: white; animation: pulse 2s infinite; }
 
 @keyframes pulse {
     0% { opacity: 1; }

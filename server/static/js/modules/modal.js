@@ -51,6 +51,15 @@ export class ModalModule {
 
     static closeTranscriptionModal() {
         document.getElementById('transcription-modal').style.display = 'none';
+        
+        // reset copy button if timeout is active
+        if (this.copyTimeout) {
+            clearTimeout(this.copyTimeout);
+            this.copyTimeout = null;
+            const copyBtn = document.querySelector('.copy-btn');
+            copyBtn.textContent = 'copy to clipboard';
+            copyBtn.style.background = '';
+        }
     }
 
     static async copyToClipboard() {
@@ -69,13 +78,25 @@ export class ModalModule {
             
             // visual feedback
             const copyBtn = document.querySelector('.copy-btn');
-            const originalText = copyBtn.textContent;
+            
+            // prevent multiple clicks from interfering
+            if (copyBtn.textContent === 'copied!') {
+                return;
+            }
+            
+            const originalText = 'copy to clipboard';
             copyBtn.textContent = 'copied!';
             copyBtn.style.background = '#27ae60';
             
-            setTimeout(() => {
+            // clear any existing timeout
+            if (this.copyTimeout) {
+                clearTimeout(this.copyTimeout);
+            }
+            
+            this.copyTimeout = setTimeout(() => {
                 copyBtn.textContent = originalText;
                 copyBtn.style.background = '';
+                this.copyTimeout = null;
             }, 1500);
             
             updateStatus('transcription copied to clipboard');

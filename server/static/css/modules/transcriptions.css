@@ -43,7 +43,8 @@
     background: var(--info);
     color: var(--fg0);
     border: 1px solid var(--info);
-    font-size: 10px;
+    font-size: 11px;
+    padding: 4px 6px;
 }
 
 #transcriptions-manage-btn:hover {
@@ -85,6 +86,10 @@
     background: var(--bg1);
 }
 
+.transcription-item[onclick]:hover {
+    background: var(--accent);
+}
+
 .transcription-info {
     flex: 1;
     display: flex;
@@ -109,6 +114,4 @@
     min-width: 160px;
 }
 
-.transcription-actions {
-    margin-left: 10px;
-}
+

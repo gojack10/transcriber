@@ -3,13 +3,7 @@ import { APP_STATE } from '../core/config.js';
 
 export class TabsModule {
     static init() {
-        // bind click events to tab buttons
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const tabName = e.target.textContent.includes('queue') ? 'queue' : 'transcriptions';
-                this.switchTab(tabName);
-            });
-        });
+        // tab buttons use inline onclick handlers
     }
 
     static switchTab(tabName) {

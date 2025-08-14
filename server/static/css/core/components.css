@@ -5,9 +5,9 @@ button {
     background: var(--accent);
     color: var(--fg1);
     border: 1px solid var(--focus);
-    padding: 8px 12px;
+    padding: 4px 6px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
     transition: all 0.2s;
     text-transform: lowercase;
 }
@@ -27,8 +27,8 @@ button:disabled {
 .delete-btn, .cancel-btn {
     background: var(--urgent);
     color: var(--fg0);
-    padding: 4px 8px;
-    font-size: 10px;
+    padding: 4px 6px;
+    font-size: 11px;
     border: 1px solid var(--urgent);
 }
 
@@ -41,7 +41,7 @@ button:disabled {
     background: var(--warning);
     color: var(--bg0);
     border: 1px solid var(--warning);
-    padding: 6px 10px;
+    padding: 4px 6px;
     font-size: 11px;
 }
 
@@ -53,8 +53,8 @@ button:disabled {
 .view-btn {
     background: var(--info);
     color: var(--fg0);
-    padding: 3px 6px;
-    font-size: 10px;
+    padding: 4px 6px;
+    font-size: 11px;
     border: 1px solid var(--info);
 }
 
@@ -67,7 +67,7 @@ button:disabled {
     background: var(--success);
     color: var(--fg0);
     border: 1px solid var(--success);
-    padding: 6px 10px;
+    padding: 4px 6px;
     font-size: 11px;
     cursor: pointer;
     text-transform: lowercase;
