@@ -21,5 +21,6 @@ export const APP_STATE = {
     transcriptionsManagementMode: false,
     selectedQueueItems: new Set(),
     selectedTranscriptions: new Set(),
-    pendingDuplicateData: null
+    pendingDuplicateData: null,
+    lastCompletedCount: 0
 };

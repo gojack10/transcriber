@@ -48,8 +48,8 @@
 }
 
 #transcriptions-manage-btn:hover {
-    background: #2980b9;
-    border-color: #2980b9;
+    background: var(--info-hover);
+    border-color: var(--info-hover);
 }
 
 .sort-controls select {

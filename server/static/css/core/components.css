@@ -33,21 +33,21 @@ button:disabled {
 }
 
 .delete-btn:hover, .cancel-btn:hover {
-    background: #c0392b;
-    border-color: #c0392b;
+    background: var(--urgent-hover);
+    border-color: var(--urgent-hover);
 }
 
 .warning-btn {
     background: var(--warning);
-    color: var(--bg0);
+    color: var(--fg0);
     border: 1px solid var(--warning);
     padding: 4px 6px;
     font-size: 11px;
 }
 
 .warning-btn:hover {
-    background: #e67e22;
-    border-color: #e67e22;
+    background: var(--warning-hover);
+    border-color: var(--warning-hover);
 }
 
 .view-btn {
@@ -59,8 +59,8 @@ button:disabled {
 }
 
 .view-btn:hover {
-    background: #2980b9;
-    border-color: #2980b9;
+    background: var(--info-hover);
+    border-color: var(--info-hover);
 }
 
 .copy-btn {
@@ -74,12 +74,12 @@ button:disabled {
 }
 
 .copy-btn:hover {
-    background: #27ae60;
-    border-color: #27ae60;
+    background: var(--success-hover);
+    border-color: var(--success-hover);
 }
 
 .copy-btn:active {
-    background: #1e8449;
+    background: var(--success-active);
 }
 
 /* input fields */
@@ -115,7 +115,7 @@ select:focus {
 
 /* checkboxes */
 .item-checkbox {
-    margin-right: 8px;
+    margin-left: 8px;
     width: 14px;
     height: 14px;
     accent-color: var(--info);
@@ -150,17 +150,17 @@ select:focus {
 
 .progress-status.uploading {
     background: var(--info);
-    color: var(--bg0);
+    color: var(--fg0);
 }
 
 .progress-status.processing {
     background: var(--warning);
-    color: var(--bg0);
+    color: var(--fg0);
 }
 
 .progress-status.success {
     background: var(--success);
-    color: var(--bg0);
+    color: var(--fg0);
 }
 
 .progress-status.error {

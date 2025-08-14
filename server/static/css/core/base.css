@@ -11,10 +11,16 @@
     --fg2: #8a8a8a;
     --accent: #3a3a3a;
     --focus: #6f6f6f;
-    --urgent: #ff5555;
-    --warning: #f39c12;
-    --success: #2ecc71;
-    --info: #3498db;
+    --urgent: #b85450;
+    --urgent-hover: #a04743;
+    --warning: #b8853d;
+    --warning-hover: #a47235;
+    --success: #6b9b7a;
+    --success-hover: #5e8a6b;
+    --success-active: #547861;
+    --info: #5a8cc7;
+    --info-hover: #4e7bb0;
+    --purple: #7a5a8b;
 }
 
 * {

@@ -55,7 +55,7 @@
 }
 
 .modal-close:hover {
-    background: #c0392b;
+    background: var(--urgent-hover);
 }
 
 .modal-body {

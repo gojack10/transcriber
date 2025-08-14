@@ -36,8 +36,8 @@
 }
 
 #queue-manage-btn:hover {
-    background: #2980b9;
-    border-color: #2980b9;
+    background: var(--info-hover);
+    border-color: var(--info-hover);
 }
 
 .queue-sort-controls select {
@@ -124,9 +124,9 @@
 /* status colors */
 .status-queued { background: var(--warning); color: white; }
 .status-downloading { background: var(--info); color: white; }
-.status-converting { background: #9b59b6; color: white; }
+.status-converting { background: var(--purple); color: white; }
 .status-converted { background: var(--success); color: white; }
-.status-transcribing { background: #e67e22; color: white; }
+.status-transcribing { background: var(--warning); color: white; }
 .status-completed { background: var(--success); color: white; }
 .status-failed { background: var(--urgent); color: white; }
 .status-skipped { background: var(--fg2); color: white; }

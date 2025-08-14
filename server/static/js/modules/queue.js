@@ -124,7 +124,6 @@ export class QueueModule {
             
             return `
                 <div class="queue-item">
-                    ${checkboxHtml}
                     <div class="item-info">
                         <div class="item-name">${fileName}</div>
                         <div class="item-details">
@@ -137,6 +136,7 @@ export class QueueModule {
                     <div class="item-actions">
                         ${APP_STATE.queueManagementMode ? '' : actionButtons}
                     </div>
+                    ${checkboxHtml}
                 </div>
             `;
         }).join('');
@@ -167,6 +167,12 @@ export class QueueModule {
             if (result.success) {
                 updateStatus(result.message);
                 this.refreshStatus();
+                
+                // refresh transcriptions since resolving duplicates can add/remove them
+                if (action === 'overwrite') {
+                    const { TranscriptionsModule } = await import('./transcriptions.js');
+                    TranscriptionsModule.loadTranscriptions();
+                }
             } else {
                 updateStatus(`failed: ${result.error}`);
             }
@@ -242,18 +248,59 @@ export class QueueModule {
         if (APP_STATE.selectedQueueItems.size === 0) return;
         
         try {
-            const result = await ApiService.delete(CONFIG.API_ENDPOINTS.QUEUE_ITEMS, { 
-                ids: Array.from(APP_STATE.selectedQueueItems) 
+            // separate duplicate items from regular items
+            const queueItems = document.querySelectorAll('.queue-item');
+            const duplicateIds = new Set();
+            const regularIds = new Set();
+            
+            queueItems.forEach(item => {
+                const checkbox = item.querySelector('.item-checkbox');
+                if (checkbox && checkbox.checked) {
+                    const statusElement = item.querySelector('[class*="status-"]');
+                    if (statusElement && statusElement.className.includes('status-pending_duplicate')) {
+                        const itemId = checkbox.onchange.toString().match(/'([^']+)'/)[1];
+                        duplicateIds.add(itemId);
+                    } else {
+                        const itemId = checkbox.onchange.toString().match(/'([^']+)'/)[1];
+                        regularIds.add(itemId);
+                    }
+                }
             });
             
-            if (result.success) {
-                updateStatus(result.message);
+            let successCount = 0;
+            let totalCount = APP_STATE.selectedQueueItems.size;
+            
+            // handle duplicate items by canceling them
+            for (const itemId of duplicateIds) {
+                try {
+                    const result = await ApiService.post(`${CONFIG.API_ENDPOINTS.RESOLVE_DUPLICATE}/${itemId}`, { action: 'cancel' });
+                    if (result.success) {
+                        successCount++;
+                    }
+                } catch (error) {
+                    console.error(`failed to cancel duplicate ${itemId}:`, error);
+                }
+            }
+            
+            // handle regular items through bulk delete
+            if (regularIds.size > 0) {
+                const result = await ApiService.delete(CONFIG.API_ENDPOINTS.QUEUE_ITEMS, { 
+                    ids: Array.from(regularIds) 
+                });
+                if (result.success) {
+                    successCount += result.removed_count || result.cancelled_count || regularIds.size;
+                }
+            }
+            
+            if (successCount > 0) {
+                updateStatus(`processed ${successCount} of ${totalCount} selected items`);
                 APP_STATE.selectedQueueItems.clear();
                 this.refreshStatus();
                 this.updateSelectedCount();
             } else {
-                updateStatus(`failed: ${result.error}`);
+                updateStatus(`failed to process selected items`);
             }
+            
         } catch (error) {
             updateStatus(`error: ${error.message}`);
         }

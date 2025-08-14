@@ -46,12 +46,12 @@ export class TranscriptionsModule {
             
             return `
                 <div class="transcription-item" ${!APP_STATE.transcriptionsManagementMode ? `onclick="TranscriptionsModule.viewTranscription(${item.id}, '${item.filename}')" style="cursor: pointer;"` : ''}>
-                    ${checkboxHtml}
                     <div class="transcription-info">
                         <div class="transcription-id">${item.id}</div>
                         <div class="transcription-filename">${item.filename}</div>
                         <div class="transcription-time">${item.transcribed_time}</div>
                     </div>
+                    ${checkboxHtml}
                 </div>
             `;
         }).join('');
@@ -149,11 +149,27 @@ export class TranscriptionsModule {
                 APP_STATE.selectedTranscriptions.clear();
                 this.loadTranscriptions();
                 this.updateSelectedCount();
+                
+                // notify other tabs that transcriptions changed
+                this.notifyTranscriptionsChanged();
             } else {
                 updateStatus(`failed: ${result.error}`);
             }
         } catch (error) {
             updateStatus(`error: ${error.message}`);
+        }
+    }
+    
+    static notifyTranscriptionsChanged() {
+        // trigger an immediate refresh if we're on transcriptions tab
+        if (APP_STATE.currentTab === 'transcriptions') {
+            this.loadTranscriptions();
+        }
+        
+        // update the count for queue tab monitoring
+        // reset last completed count to ensure we detect future changes
+        if (APP_STATE.lastCompletedCount) {
+            APP_STATE.lastCompletedCount = Math.max(0, APP_STATE.lastCompletedCount - 1);
         }
     }
 }

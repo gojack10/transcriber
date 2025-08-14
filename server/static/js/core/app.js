@@ -19,6 +19,9 @@ class App {
         await QueueModule.refreshStatus();
         await TranscriptionsModule.loadTranscriptions();
         
+        // initialize completed count tracking
+        this.initializeCompletedCountTracking();
+        
         // start auto-refresh
         this.startAutoRefresh();
         
@@ -26,10 +29,42 @@ class App {
         window.addEventListener('beforeunload', this.cleanup);
     }
     
+    static initializeCompletedCountTracking() {
+        // set initial completed count from the queue stats
+        const currentStats = document.getElementById('queue-stats');
+        if (currentStats) {
+            const completedElement = Array.from(currentStats.querySelectorAll('.stat-item'))
+                .find(item => item.querySelector('.stat-label')?.textContent === 'completed');
+            if (completedElement) {
+                APP_STATE.lastCompletedCount = parseInt(completedElement.querySelector('.stat-number')?.textContent || '0');
+            }
+        }
+    }
+    
     static startAutoRefresh() {
-        APP_STATE.statusInterval = setInterval(() => {
+        APP_STATE.statusInterval = setInterval(async () => {
             if (APP_STATE.currentTab === 'queue') {
-                QueueModule.refreshStatus();
+                // check if queue status changed in a way that might affect transcriptions
+                const previousCompletedCount = APP_STATE.lastCompletedCount || 0;
+                
+                await QueueModule.refreshStatus();
+                
+                // if we're monitoring queue and completed count increased, refresh transcriptions
+                const currentStats = document.getElementById('queue-stats');
+                if (currentStats) {
+                    const completedElement = Array.from(currentStats.querySelectorAll('.stat-item'))
+                        .find(item => item.querySelector('.stat-label')?.textContent === 'completed');
+                    if (completedElement) {
+                        const currentCompletedCount = parseInt(completedElement.querySelector('.stat-number')?.textContent || '0');
+                        if (currentCompletedCount > previousCompletedCount) {
+                            // completed count increased - likely new transcriptions available
+                            TranscriptionsModule.loadTranscriptions();
+                        }
+                        APP_STATE.lastCompletedCount = currentCompletedCount;
+                    }
+                }
+            } else if (APP_STATE.currentTab === 'transcriptions') {
+                TranscriptionsModule.loadTranscriptions();
             }
         }, CONFIG.REFRESH_INTERVAL);
     }

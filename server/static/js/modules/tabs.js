@@ -27,6 +27,7 @@ export class TabsModule {
     static async loadTabData(tabName) {
         if (tabName === 'transcriptions') {
             const { TranscriptionsModule } = await import('./transcriptions.js');
+            // always refresh transcriptions when tab is switched to
             TranscriptionsModule.loadTranscriptions();
         } else if (tabName === 'queue') {
             const { QueueModule } = await import('./queue.js');
