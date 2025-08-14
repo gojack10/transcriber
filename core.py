@@ -1,4 +1,5 @@
 import time
+import os
 # STATS_MONITORING_IMPLEMENTATION - comment out these 2 lines to disable stats
 # from wrappers.transcription_statistics import start_stats_monitoring, stop_stats_monitoring
 from faster_whisper import WhisperModel
@@ -44,30 +45,16 @@ class TranscriptionOrchestrator:
                 vad_filter=True,
                 beam_size=5,
             )
+            
             transcription_text = "".join(s.text for s in segments)
             
-            file_stem = Path(item.file_path).stem
-            output_filename = f"{file_stem}.txt"
-            output_path = self.temp_dir / output_filename
-            
-            header = f"""Transcription of: {Path(item.file_path).name}
-File path: {item.file_path}
-Transcribed on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-Model used: faster-whisper:{self.model_id} | lang={getattr(info, "language", "en")} p={getattr(info, "language_probability", 1.0):.2f}
-Text length: {len(transcription_text)} characters
-
---- TRANSCRIPTION ---
-
-"""
-            
-            
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(header)
-                f.write(transcription_text)
-            
-            self.db.add_transcription(output_filename, transcription_text, item.id)
+            self.db.add_transcription(item.file_path, transcription_text, item.id)
             item.update_status(QueueStatus.COMPLETED)
-            print(f"transcription saved to: {output_filename}")
+            print(f"transcription saved to: {item.file_path}")
+            
+            if os.path.exists(item.file_path):
+                os.remove(item.file_path)
+                print(f"cleaned up {item.file_path}") 
             
         except Exception as e:
             print(f"error transcribing {item.file_path}: {e}")
