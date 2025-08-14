@@ -21,7 +21,8 @@ class TranscriptionDB:
             filename TEXT NOT NULL,
             content TEXT NOT NULL,
             transcribed_time TEXT NOT NULL,
-            queue_item_id TEXT
+            queue_item_id TEXT,
+            youtube_url TEXT
         );""")
             conn.commit()
 
@@ -30,14 +31,14 @@ class TranscriptionDB:
             dt = datetime.now(pytz.timezone("America/Los_Angeles"))
         return dt.strftime("%Y-%m-%d %H:%M:%S PST")
     
-    def add_transcription(self, filename: str, content: str, queue_item_id: str):
+    def add_transcription(self, filename: str, content: str, queue_item_id: str, youtube_url: str = None):
         try:
             transcribed_time = self.format_pst_time()
             
             with self.get_connection() as conn:
                 conn.execute("""
-                INSERT INTO transcriptions (filename, transcribed_time, content, queue_item_id)
-                VALUES (?, ?, ?, ?);""", (filename, transcribed_time, content, queue_item_id))
+                INSERT INTO transcriptions (filename, transcribed_time, content, queue_item_id, youtube_url)
+                VALUES (?, ?, ?, ?, ?);""", (filename, transcribed_time, content, queue_item_id, youtube_url))
                 conn.commit()
                 return True
         except Exception as e:
@@ -67,7 +68,7 @@ class TranscriptionDB:
                 
             with self.get_connection() as conn:
                 cursor = conn.execute(f"""
-                SELECT id, filename, transcribed_time, queue_item_id FROM transcriptions 
+                SELECT id, filename, transcribed_time, queue_item_id, youtube_url FROM transcriptions 
                 ORDER BY {sort_by} {sort_order.upper()};""")
                 rows = cursor.fetchall()
                 
@@ -75,7 +76,8 @@ class TranscriptionDB:
                     'id': row[0],
                     'filename': row[1], 
                     'transcribed_time': row[2],
-                    'queue_item_id': row[3]
+                    'queue_item_id': row[3],
+                    'youtube_url': row[4]
                 } for row in rows]
         except Exception as e:
             print(f"error getting all transcriptions: {e}")
@@ -116,6 +118,34 @@ class TranscriptionDB:
         except Exception as e:
             print(f"error checking transcription existence: {e}")
             return False
+
+    def youtube_url_exists(self, url: str) -> bool:
+        """check if youtube url already has a transcription"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("SELECT 1 FROM transcriptions WHERE youtube_url = ?", (url,))
+                return cursor.fetchone() is not None
+        except Exception as e:
+            print(f"error checking youtube url existence: {e}")
+            return False
+    
+    def get_youtube_url_info(self, url: str) -> Optional[Dict[str, Any]]:
+        """get transcription info for a youtube url if it exists"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("""
+                SELECT filename, transcribed_time FROM transcriptions WHERE youtube_url = ?""", (url,))
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        'url': url,
+                        'video_title': row[0],
+                        'added_time': row[1]
+                    }
+                return None
+        except Exception as e:
+            print(f"error getting youtube url info: {e}")
+            return None
 
     @contextmanager
     def get_connection(self):

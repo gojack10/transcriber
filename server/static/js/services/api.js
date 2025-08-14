@@ -14,7 +14,22 @@ export class ApiService {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
         });
-        if (!response.ok) throw new Error(`http error! status: ${response.status}`);
+        
+        if (!response.ok) {
+            // try to get json error response for better error handling
+            let errorData;
+            try {
+                errorData = await response.json();
+            } catch {
+                errorData = { error: `http error! status: ${response.status}` };
+            }
+            
+            const error = new Error(errorData.error || `http error! status: ${response.status}`);
+            error.status = response.status;
+            error.response = errorData;
+            throw error;
+        }
+        
         return response.json();
     }
 

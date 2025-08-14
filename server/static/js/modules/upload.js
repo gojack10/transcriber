@@ -169,7 +169,8 @@ export class UploadModule {
             const result = await ApiService.post(CONFIG.API_ENDPOINTS.QUEUE_LINK, { url });
             
             if (result.success) {
-                updateStatus(`url added to queue successfully`);
+                const title = result.video_title || 'unknown';
+                updateStatus(`url added to queue successfully: ${title}`);
                 this.setProgressStatus(progressItem, 'success', 'added to queue');
                 urlInput.value = '';
                 
@@ -180,12 +181,23 @@ export class UploadModule {
                 const { QueueModule } = await import('./queue.js');
                 QueueModule.refreshStatus();
             } else {
-                updateStatus(`failed to add url: ${result.error}`);
-                this.setProgressStatus(progressItem, 'error', `failed: ${result.error}`);
+                if (result.duplicate) {
+                    updateStatus(`duplicate url detected`);
+                    this.setProgressStatus(progressItem, 'error', `duplicate`);
+                } else {
+                    updateStatus(`failed to add url: ${result.error}`);
+                    this.setProgressStatus(progressItem, 'error', `failed: ${result.error}`);
+                }
             }
         } catch (error) {
-            updateStatus(`error adding url: ${error.message}`);
-            this.setProgressStatus(progressItem, 'error', `error: ${error.message}`);
+            // handle 409 conflict (duplicate) responses
+            if (error.status === 409 && error.response?.duplicate) {
+                updateStatus(`duplicate url detected`);
+                this.setProgressStatus(progressItem, 'error', `duplicate`);
+            } else {
+                updateStatus(`error adding url: ${error.message}`);
+                this.setProgressStatus(progressItem, 'error', `error: ${error.message}`);
+            }
         }
     }
 

@@ -10,6 +10,18 @@ from wrappers.db.db_manager import TranscriptionDB
 conversion_queue = QueueManager()
 db = TranscriptionDB()
 
+def cleanup_item_files(item):
+    """remove downloaded files when queue item is deleted"""
+    if not item or not item.file_path:
+        return
+    
+    try:
+        if os.path.exists(item.file_path):
+            os.remove(item.file_path)
+            print(f"cleaned up file: {item.file_path}")
+    except Exception as e:
+        print(f"error cleaning up file {item.file_path}: {e}")
+
 def check_duplicate_before_conversion(item_id):
     item = conversion_queue.get_item(item_id)
     if not item or not item.file_path:
@@ -78,17 +90,24 @@ def check_local_file_exists(mp4_path, temp_dir="/home/jack/llm/transcription/.te
     
     return False, None
 
-def download_audio(yt_link, on_complete=None):    
+def download_audio(yt_link, on_complete=None, existing_item=None):    
     
     temp_dir = "/home/jack/llm/transcription/.temp"
+    
+    if existing_item:
+        item_id = existing_item.id
+        video_title = existing_item.video_title
+    else:
+        video_title = get_video_title(yt_link)
 
     file_exists, existing_file_path = check_file_exists(yt_link, temp_dir)
     if file_exists:
         print(f"file already exists: {existing_file_path}, skipping download...")
-        item_id = conversion_queue.add_item(yt_link)
+        if not existing_item:
+            item_id = conversion_queue.add_item(yt_link, yt_link, video_title)
         conversion_queue.update_item_path(item_id, existing_file_path)
         conversion_queue.get_item(item_id).update_status(QueueStatus.SKIPPED)
-        print(f"Skipped {yt_link} - file already exists. \n\nQueueManager: {conversion_queue.get_all_items()}")
+        print(f"Skipped {yt_link} - file already exists.")
         
         check_duplicate_before_conversion(item_id)
         
@@ -96,7 +115,8 @@ def download_audio(yt_link, on_complete=None):
             on_complete(True, "file already exists, skipped download", existing_file_path)
         return "file already exists, skipped download"
 
-    item_id = conversion_queue.add_item(yt_link)
+    if not existing_item:
+        item_id = conversion_queue.add_item(yt_link, yt_link, video_title)
     conversion_queue.get_item(item_id).update_status(QueueStatus.DOWNLOADING)
     print(f"Downloading {yt_link}. \n\nQueueManager: {conversion_queue.get_all_items()}")
     

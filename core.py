@@ -50,7 +50,9 @@ class TranscriptionOrchestrator:
             
             filename = Path(item.file_path).stem
 
-            self.db.add_transcription(filename, transcription_text, item.id)
+            # include youtube url if this item came from a youtube download
+            youtube_url = getattr(item, 'url', None) if hasattr(item, 'url') else None
+            self.db.add_transcription(filename, transcription_text, item.id, youtube_url)
             item.update_status(QueueStatus.COMPLETED)
             
             if os.path.exists(item.file_path):

@@ -9,7 +9,7 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wrappers.media_manager import conversion_queue, download_audio, convert_to_audio
+from wrappers.media_manager import conversion_queue, download_audio, convert_to_audio, get_video_title
 from wrappers.queue_manager import QueueStatus
 from wrappers.db.db_manager import TranscriptionDB
 
@@ -61,6 +61,30 @@ def add_link_to_queue():
         if not url:
             return jsonify({'error': 'url cannot be empty'}), 400
         
+        if db.youtube_url_exists(url):
+            existing_info = db.get_youtube_url_info(url)
+            video_title = existing_info.get('video_title') if existing_info else 'unknown'
+            
+            item_id = conversion_queue.add_item(url, url, video_title)
+            item = conversion_queue.get_item(item_id)
+            item.update_status(QueueStatus.PENDING_DUPLICATE, f"duplicate url: {video_title}")
+            
+            item.pending_transcription = {
+                'url': url,
+                'video_title': video_title,
+                'existing_transcription': existing_info
+            }
+            
+            return jsonify({
+                'success': False,
+                'error': 'duplicate url detected',
+                'duplicate': True,
+                'video_title': video_title,
+                'url': url
+            }), 409
+        
+        video_title = get_video_title(url)
+        
         def download_task():
             try:
                 download_audio(url)
@@ -72,8 +96,9 @@ def add_link_to_queue():
         
         return jsonify({
             'success': True,
-            'message': f'download started for {url}',
-            'url': url
+            'message': f'download started for {video_title or url}',
+            'url': url,
+            'video_title': video_title
         })
         
     except Exception as e:
@@ -144,6 +169,7 @@ def get_queue_items():
                 'id': item.id,
                 'file_path': item.file_path,
                 'url': getattr(item, 'url', None),
+                'video_title': getattr(item, 'video_title', None),
                 'status': item.status.value,
                 'created_at': item.created_at.isoformat(),
                 'updated_at': item.updated_at.isoformat(),
@@ -166,7 +192,6 @@ def remove_queue_item(item_id):
         if not item:
             return jsonify({'error': 'item not found'}), 404
         
-        # check if item can be cancelled (active processing)
         if conversion_queue.can_cancel_item(item_id):
             item.update_status(QueueStatus.CANCELLED, "cancelled by user")
             return jsonify({
@@ -376,35 +401,65 @@ def resolve_duplicate(item_id):
             })
         
         elif action == 'overwrite':
-            filename = item.pending_transcription['filename']
-            
-            existing_transcriptions = db.get_all_transcriptions()
-            existing_id = None
-            for t in existing_transcriptions:
-                if t['filename'] == filename:
-                    existing_id = t['id']
-                    break
-            
-            if existing_id:
-                db.delete_transcription(existing_id)
-            
-            if not item.pending_transcription.get('content'):
-                item.update_status(QueueStatus.CONVERTED)
+            if 'url' in item.pending_transcription:
+                url = item.pending_transcription['url']
+                video_title = item.pending_transcription['video_title']
+                
+                existing_transcriptions = db.get_all_transcriptions()
+                for t in existing_transcriptions:
+                    if t.get('youtube_url') == url:
+                        db.delete_transcription(t['id'])
+                        break
+                
                 item.pending_transcription = None
+                item.update_status(QueueStatus.DOWNLOADING)
+                
+                def download_task():
+                    try:
+                        download_audio(url, existing_item=item)
+                    except Exception as e:
+                        print(f"download error for {url}: {e}")
+                        item.mark_failed(str(e))
+                
+                import threading
+                thread = threading.Thread(target=download_task, daemon=True)
+                thread.start()
                 
                 return jsonify({
                     'success': True,
-                    'message': f'existing transcription deleted, item queued for transcription: {filename}'
+                    'message': f'existing transcription deleted, re-processing: {video_title}'
                 })
+            
             else:
-                content = item.pending_transcription['content']
-                header = item.pending_transcription['header']
+                filename = item.pending_transcription['filename']
                 
-                from pathlib import Path
-                temp_dir = Path('/home/jack/llm/transcription/.temp')
-                output_path = temp_dir / filename
-                with open(output_path, "w", encoding="utf-8") as f:
-                    f.write(header)
+                existing_transcriptions = db.get_all_transcriptions()
+                existing_id = None
+                for t in existing_transcriptions:
+                    if t['filename'] == filename:
+                        existing_id = t['id']
+                        break
+                
+                if existing_id:
+                    db.delete_transcription(existing_id)
+            
+                if not item.pending_transcription.get('content'):
+                    item.update_status(QueueStatus.CONVERTED)
+                    item.pending_transcription = None
+                    
+                    return jsonify({
+                        'success': True,
+                        'message': f'existing transcription deleted, item queued for transcription: {filename}'
+                    })
+                else:
+                    content = item.pending_transcription['content']
+                    header = item.pending_transcription['header']
+                    
+                    from pathlib import Path
+                    temp_dir = Path('/home/jack/llm/transcription/.temp')
+                    output_path = temp_dir / filename
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        f.write(header)
                     f.write(content)
                 
                 db.add_transcription(filename, content, item.id)

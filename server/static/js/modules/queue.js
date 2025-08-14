@@ -51,8 +51,11 @@ export class QueueModule {
                     valueB = new Date(b.updated_at);
                     break;
                 case 'file_path':
-                    valueA = a.file_path ? a.file_path.split('/').pop().toLowerCase() : (a.url || '').toLowerCase();
-                    valueB = b.file_path ? b.file_path.split('/').pop().toLowerCase() : (b.url || '').toLowerCase();
+                    // use video title for youtube urls, filename for files
+                    valueA = a.url && a.video_title ? a.video_title.toLowerCase() : 
+                            (a.file_path ? a.file_path.split('/').pop().toLowerCase() : (a.url || '').toLowerCase());
+                    valueB = b.url && b.video_title ? b.video_title.toLowerCase() : 
+                            (b.file_path ? b.file_path.split('/').pop().toLowerCase() : (b.url || '').toLowerCase());
                     break;
                 default:
                     valueA = new Date(a.updated_at);
@@ -99,7 +102,8 @@ export class QueueModule {
         }
         
         itemsContainer.innerHTML = items.map(item => {
-            const fileName = item.file_path ? item.file_path.split('/').pop() : item.url;
+            const displayName = item.url && item.video_title ? item.video_title : 
+                               (item.file_path ? item.file_path.split('/').pop() : item.url);
             const timeAgo = getTimeAgo(new Date(item.updated_at));
             
             const activeStates = ['queued', 'downloading', 'converting', 'transcribing'];
@@ -125,9 +129,9 @@ export class QueueModule {
             return `
                 <div class="queue-item">
                     <div class="item-info">
-                        <div class="item-name">${fileName}</div>
+                        <div class="item-name">${displayName}</div>
                         <div class="item-details">
-                            ${item.url ? `url: ${item.url}` : `path: ${item.file_path}`}<br>
+                            ${item.url ? `type: youtube video` : `path: ${item.file_path}`}<br>
                             updated: ${timeAgo}
                             ${item.error_message ? `<br>error: ${item.error_message}` : ''}
                         </div>
@@ -168,6 +172,9 @@ export class QueueModule {
                 updateStatus(result.message);
                 this.refreshStatus();
                 
+                // clear any duplicate upload progress items
+                this.clearDuplicateUploadItems();
+                
                 // refresh transcriptions since resolving duplicates can add/remove them
                 if (action === 'overwrite') {
                     const { TranscriptionsModule } = await import('./transcriptions.js');
@@ -179,6 +186,17 @@ export class QueueModule {
         } catch (error) {
             updateStatus(`error: ${error.message}`);
         }
+    }
+
+    static clearDuplicateUploadItems() {
+        // remove any upload progress items showing duplicate errors
+        const progressItems = document.querySelectorAll('.progress-item');
+        progressItems.forEach(item => {
+            const statusText = item.querySelector('.progress-status')?.textContent;
+            if (statusText && statusText.includes('duplicate')) {
+                item.remove();
+            }
+        });
     }
 
     static toggleManagement() {

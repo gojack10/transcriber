@@ -23,10 +23,11 @@ class QueueItem:
     updated_at: datetime
     error_message: Optional[str]
 
-    def __init__(self, id: str, file_path: Optional[str] = None, url: Optional[str] = None):
+    def __init__(self, id: str, file_path: Optional[str] = None, url: Optional[str] = None, video_title: Optional[str] = None):
         self.id = id
         self.url = url
         self.file_path = file_path
+        self.video_title = video_title
         self.status = QueueStatus.QUEUED
         self.created_at = datetime.now()
         self.updated_at = datetime.now()
@@ -51,9 +52,9 @@ class QueueManager:
         self.queue = {}
         self.processing_order = []
     
-    def add_item(self, file_path: str, url: Optional[str] = None) -> str:
+    def add_item(self, file_path: str, url: Optional[str] = None, video_title: Optional[str] = None) -> str:
         item_id = str(uuid.uuid4())
-        item = QueueItem(item_id, file_path, url)
+        item = QueueItem(item_id, file_path, url, video_title)
         self.queue[item_id] = item
         self.processing_order.append(item_id)
         print(f"Added item {item_id} for {file_path}")
@@ -97,6 +98,13 @@ class QueueManager:
     
     def remove_item(self, item_id: str) -> bool:
         if item_id in self.queue:
+            item = self.queue[item_id]
+            try:
+                from wrappers.media_manager import cleanup_item_files
+                cleanup_item_files(item)
+            except ImportError:
+                pass
+            
             del self.queue[item_id]
             if item_id in self.processing_order:
                 self.processing_order.remove(item_id)
