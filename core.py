@@ -48,9 +48,10 @@ class TranscriptionOrchestrator:
             
             transcription_text = "".join(s.text for s in segments)
             
-            self.db.add_transcription(item.file_path, transcription_text, item.id)
+            filename = Path(item.file_path).stem
+
+            self.db.add_transcription(filename, transcription_text, item.id)
             item.update_status(QueueStatus.COMPLETED)
-            print(f"transcription saved to: {item.file_path}")
             
             if os.path.exists(item.file_path):
                 os.remove(item.file_path)

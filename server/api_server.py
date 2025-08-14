@@ -308,24 +308,6 @@ def delete_transcriptions():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/transcriptions/check-duplicate', methods=['POST'])
-def check_duplicate_transcription():
-    """check if a transcription filename already exists"""
-    try:
-        data = request.get_json()
-        if not data or 'filename' not in data:
-            return jsonify({'error': 'filename field required'}), 400
-        
-        filename = data['filename']
-        exists = db.transcription_exists(filename)
-        
-        return jsonify({
-            'exists': exists,
-            'filename': filename
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/queue/duplicates', methods=['GET'])
 def get_pending_duplicates():

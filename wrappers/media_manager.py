@@ -10,30 +10,16 @@ from wrappers.db.db_manager import TranscriptionDB
 conversion_queue = QueueManager()
 db = TranscriptionDB()
 
-def check_for_duplicate_after_conversion(item_id):
-    """check for duplicate transcription filename after file conversion and mark accordingly"""
-    try:
-        item = conversion_queue.get_item(item_id)
-        if not item or not item.file_path:
-            return
-        
-        file_stem = Path(item.file_path).stem
-        output_filename = f"{file_stem}.txt"
-        
-        if db.transcription_exists(output_filename):
-            print(f"duplicate transcription filename detected early: {output_filename}")
-            print(f"marking item {item.id} as pending duplicate resolution before transcription")
-            item.update_status(QueueStatus.PENDING_DUPLICATE, f"duplicate filename: {output_filename}")
-            item.pending_transcription = {
-                'filename': output_filename,
-                'content': None,
-                'header': None
-            }
-        else:
-            print(f"no duplicate found for {output_filename}, item ready for transcription")
-            
-    except Exception as e:
-        print(f"error checking for duplicate: {e}")
+def check_duplicate_before_conversion(item_id):
+    item = conversion_queue.get_item(item_id)
+    if not item or not item.file_path:
+        return
+    
+    filename = Path(item.file_path).stem
+    
+    if db.transcription_exists(filename):
+        item.update_status(QueueStatus.PENDING_DUPLICATE, f"duplicate filename: {filename}")
+        item.pending_transcription = {'filename': filename, 'content': None, 'header': None}
 
 def get_video_title(yt_link):
     """get video title from yt-dlp without downloading"""
@@ -104,7 +90,7 @@ def download_audio(yt_link, on_complete=None):
         conversion_queue.get_item(item_id).update_status(QueueStatus.SKIPPED)
         print(f"Skipped {yt_link} - file already exists. \n\nQueueManager: {conversion_queue.get_all_items()}")
         
-        check_for_duplicate_after_conversion(item_id)
+        check_duplicate_before_conversion(item_id)
         
         if on_complete:
             on_complete(True, "file already exists, skipped download", existing_file_path)
@@ -162,7 +148,7 @@ def download_audio(yt_link, on_complete=None):
         conversion_queue.get_item(item_id).update_status(QueueStatus.CONVERTED)
         print(f"Converted {opus_file} to {ogg_file}. \n\nQueueManager: {conversion_queue.get_all_items()}")
         
-        check_for_duplicate_after_conversion(item_id)
+        check_duplicate_before_conversion(item_id)
     else:
         conversion_queue.get_item(item_id).mark_failed(convert_output.stdout + convert_output.stderr)
 
@@ -192,7 +178,7 @@ def convert_to_audio(file_path, file_name=None, on_complete=None):
         conversion_queue.get_item(item_id).update_status(QueueStatus.SKIPPED)
         print(f"Skipped conversion of {file_path} - file already exists. \n\nQueueManager: {conversion_queue.get_all_items()}")
         
-        check_for_duplicate_after_conversion(item_id)
+        check_duplicate_before_conversion(item_id)
         
         if on_complete:
             on_complete(True, "file already exists, skipped conversion", existing_file_path)
@@ -222,7 +208,7 @@ def convert_to_audio(file_path, file_name=None, on_complete=None):
         conversion_queue.get_item(item_id).update_status(QueueStatus.CONVERTED)
         print(f"Converted {file_path} to {output_path}. \n\nQueueManager: {conversion_queue.get_all_items()}")
         
-        check_for_duplicate_after_conversion(item_id)
+        check_duplicate_before_conversion(item_id)
     else:
         conversion_queue.get_item(item_id).mark_failed(output.stdout + output.stderr)
     
