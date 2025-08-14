@@ -1,29 +1,75 @@
 /* upload section styles */
 
-.upload-area {
-    border: 2px dashed var(--accent);
-    padding: 30px 15px;
-    text-align: center;
-    position: relative;
+.upload-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.upload-types {
+    display: flex;
+    background: var(--bg2);
+    overflow: hidden;
+}
+
+.upload-type-btn {
+    background: transparent;
+    border: none;
+    padding: 6px 12px;
+    font-size: 11px;
+    color: var(--fg2);
     cursor: pointer;
     transition: all 0.2s;
 }
 
-.upload-area:hover,
-.upload-area.dragover {
+.upload-type-btn.active {
+    background: var(--accent);
+    color: var(--fg1);
+}
+
+.upload-type-btn:hover:not(.active) {
+    background: var(--bg1);
+    color: var(--fg1);
+}
+
+/* upload zones */
+.upload-zone {
+    border: 1px solid var(--accent);
+    padding: 20px;
+    text-align: center;
+    position: relative;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--bg0);
+}
+
+.upload-zone:hover,
+.upload-zone.dragover {
     border-color: var(--focus);
-    background-color: var(--bg1);
+    background: var(--bg1);
 }
 
-.upload-content p {
-    font-size: 13px;
+.upload-icon {
+    font-size: 20px;
     color: var(--fg2);
-    margin-bottom: 4px;
+    margin-bottom: 8px;
 }
 
-.file-types {
-    font-size: 11px !important;
-    color: var(--fg2) !important;
+.upload-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.upload-primary {
+    font-size: 12px;
+    color: var(--fg1);
+}
+
+.upload-secondary {
+    font-size: 10px;
+    color: var(--fg2);
 }
 
 #file-input {
@@ -37,16 +83,16 @@
 }
 
 /* url input */
-.url-input-group {
+.url-input-container {
     display: flex;
     gap: 8px;
 }
 
 #url-input {
     flex: 1;
-    padding: 8px;
+    padding: 8px 10px;
     border: 1px solid var(--accent);
-    background: var(--bg1);
+    background: var(--bg0);
     color: var(--fg1);
     font-size: 12px;
 }
@@ -54,12 +100,16 @@
 #url-input:focus {
     outline: none;
     border-color: var(--focus);
-    background: var(--bg0);
 }
 
-/* progress areas */
-.upload-progress, .url-progress {
-    margin-top: 10px;
-    max-height: 150px;
-    overflow-y: auto;
+#add-url-btn {
+    padding: 8px 12px;
+    font-size: 11px;
+}
+
+/* progress area */
+.upload-progress {
+    margin-top: 15px;
+    border-top: 1px solid var(--accent);
+    padding-top: 10px;
 }

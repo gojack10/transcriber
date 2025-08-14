@@ -4,6 +4,10 @@ import { updateStatus, generateId } from '../core/utils.js';
 import { ApiService } from '../services/api.js';
 
 export class UploadModule {
+    static activeUploads = new Set();
+    static completedUploads = new Set();
+    static currentUploadType = 'files';
+    
     static init() {
         this.initializeEventListeners();
     }
@@ -18,10 +22,19 @@ export class UploadModule {
         uploadArea.addEventListener('drop', this.handleDrop);
         fileInput.addEventListener('change', this.handleFileSelect);
         
-        // url input
         document.getElementById('url-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.addUrl();
         });
+    }
+
+    static switchUploadType(type) {
+        this.currentUploadType = type;
+        
+        document.querySelectorAll('.upload-type-btn').forEach(btn => btn.classList.remove('active'));
+        document.getElementById(`${type}-tab`).classList.add('active');
+        
+        document.getElementById('files-upload').style.display = type === 'files' ? 'block' : 'none';
+        document.getElementById('url-upload').style.display = type === 'url' ? 'block' : 'none';
     }
 
     static handleDragOver = (e) => {
@@ -47,13 +60,15 @@ export class UploadModule {
         const progressContainer = document.getElementById('upload-progress');
         progressContainer.style.display = 'block';
         
-        for (const file of files) {
-            await this.uploadFile(file);
-        }
+        const uploadPromises = Array.from(files).map(file => this.uploadFile(file));
+        await Promise.all(uploadPromises);
         
         setTimeout(() => {
-            progressContainer.style.display = 'none';
-            progressContainer.innerHTML = '';
+            if (this.activeUploads.size === 0) {
+                progressContainer.style.display = 'none';
+                progressContainer.innerHTML = '';
+                this.completedUploads.clear();
+            }
         }, CONFIG.PROGRESS_HIDE_DELAY);
     }
 
@@ -61,6 +76,7 @@ export class UploadModule {
         const progressContainer = document.getElementById('upload-progress');
         const progressId = `upload-${generateId()}`;
         
+        this.activeUploads.add(progressId);
         const progressItem = this.createProgressItem(progressId, file.name);
         progressContainer.appendChild(progressItem);
         
@@ -73,8 +89,16 @@ export class UploadModule {
             
             if (result.success) {
                 updateStatus(`${file.name} uploaded successfully`);
-                this.setProgressStatus(progressItem, 'success', 'success');
-                // refresh queue after successful upload
+                this.setProgressStatus(progressItem, 'success', 'added to queue');
+                this.completedUploads.add(progressId);
+                
+                setTimeout(() => {
+                    if (this.completedUploads.has(progressId)) {
+                        progressItem.remove();
+                        this.completedUploads.delete(progressId);
+                    }
+                }, CONFIG.UPLOAD_SUCCESS_DISPLAY_TIME);
+                
                 const { QueueModule } = await import('./queue.js');
                 QueueModule.refreshStatus();
             } else {
@@ -83,6 +107,8 @@ export class UploadModule {
         } catch (error) {
             updateStatus(`upload error: ${error.message}`);
             this.setProgressStatus(progressItem, 'error', `error: ${error.message}`);
+        } finally {
+            this.activeUploads.delete(progressId);
         }
     }
 
@@ -91,28 +117,34 @@ export class UploadModule {
         progressItem.className = 'progress-item';
         progressItem.id = id;
         progressItem.innerHTML = `
-            <div class="progress-filename">${filename}</div>
-            <div class="progress-status uploading">uploading...</div>
-            <div class="upload-progress-bar">
-                <div class="upload-progress-fill"></div>
+            <div class="progress-header">
+                <div class="progress-filename">${filename}</div>
+                <div class="progress-status uploading">uploading</div>
             </div>
-            <div class="upload-progress-text">0%</div>
+            <div class="progress-bar-container">
+                <div class="progress-bar">
+                    <div class="progress-bar-fill"></div>
+                </div>
+            </div>
         `;
         return progressItem;
     }
 
     static updateProgress(progressItem, percent) {
-        const progressFill = progressItem.querySelector('.upload-progress-fill');
-        const progressText = progressItem.querySelector('.upload-progress-text');
-        
+        const progressFill = progressItem.querySelector('.progress-bar-fill');
         progressFill.style.width = `${percent}%`;
-        progressText.textContent = `${Math.round(percent)}%`;
     }
 
     static setProgressStatus(progressItem, statusClass, statusText) {
         const statusElement = progressItem.querySelector('.progress-status');
         statusElement.textContent = statusText;
         statusElement.className = `progress-status ${statusClass}`;
+        
+        if (statusClass === 'success') {
+            progressItem.style.borderLeftColor = 'var(--success)';
+        } else if (statusClass === 'error') {
+            progressItem.style.borderLeftColor = 'var(--urgent)';
+        }
     }
 
     static async addUrl() {
@@ -124,48 +156,49 @@ export class UploadModule {
             return;
         }
         
-        const progressContainer = document.getElementById('url-progress');
+        const progressContainer = document.getElementById('upload-progress');
         const progressId = `url-${generateId()}`;
         
         progressContainer.style.display = 'block';
-        const progressItem = document.createElement('div');
-        progressItem.className = 'progress-item';
-        progressItem.id = progressId;
-        progressItem.innerHTML = `
-            <div class="progress-filename">${url}</div>
-            <div class="progress-status processing">processing...</div>
-        `;
+        const progressItem = this.createUrlProgressItem(progressId, url);
         progressContainer.appendChild(progressItem);
         
         try {
             updateStatus(`adding url to queue...`);
             
             const result = await ApiService.post(CONFIG.API_ENDPOINTS.QUEUE_LINK, { url });
-            const statusElement = progressItem.querySelector('.progress-status');
             
             if (result.success) {
                 updateStatus(`url added to queue successfully`);
-                statusElement.textContent = 'added to queue';
-                statusElement.className = 'progress-status success';
+                this.setProgressStatus(progressItem, 'success', 'added to queue');
                 urlInput.value = '';
-                // refresh queue after successful url add
+                
+                setTimeout(() => {
+                    progressItem.remove();
+                }, CONFIG.UPLOAD_SUCCESS_DISPLAY_TIME);
+                
                 const { QueueModule } = await import('./queue.js');
                 QueueModule.refreshStatus();
             } else {
                 updateStatus(`failed to add url: ${result.error}`);
-                statusElement.textContent = `failed: ${result.error}`;
-                statusElement.className = 'progress-status error';
+                this.setProgressStatus(progressItem, 'error', `failed: ${result.error}`);
             }
         } catch (error) {
             updateStatus(`error adding url: ${error.message}`);
-            const statusElement = progressItem.querySelector('.progress-status');
-            statusElement.textContent = `error: ${error.message}`;
-            statusElement.className = 'progress-status error';
+            this.setProgressStatus(progressItem, 'error', `error: ${error.message}`);
         }
-        
-        setTimeout(() => {
-            progressContainer.style.display = 'none';
-            progressContainer.innerHTML = '';
-        }, CONFIG.PROGRESS_HIDE_DELAY);
+    }
+
+    static createUrlProgressItem(id, url) {
+        const progressItem = document.createElement('div');
+        progressItem.className = 'progress-item';
+        progressItem.id = id;
+        progressItem.innerHTML = `
+            <div class="progress-header">
+                <div class="progress-filename">${url}</div>
+                <div class="progress-status processing">processing</div>
+            </div>
+        `;
+        return progressItem;
     }
 }

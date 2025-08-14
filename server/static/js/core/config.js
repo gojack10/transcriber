@@ -1,7 +1,8 @@
 // app configuration and constants
 export const CONFIG = {
     REFRESH_INTERVAL: 2000,
-    PROGRESS_HIDE_DELAY: 3000,
+    PROGRESS_HIDE_DELAY: 8000,
+    UPLOAD_SUCCESS_DISPLAY_TIME: 5000,
     API_ENDPOINTS: {
         QUEUE_STATUS: '/api/queue/status',
         QUEUE_ITEMS: '/api/queue/items',

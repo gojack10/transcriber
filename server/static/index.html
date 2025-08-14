@@ -23,30 +23,39 @@
         <main>
             <!-- queue tab -->
             <div id="queue-tab" class="tab-content active">
-                <!-- file upload section -->
+                <!-- upload section -->
                 <section class="upload-section">
-                    <h2>upload files</h2>
-                    <div class="upload-area" id="upload-area">
-                        <div class="upload-content">
-                            <p>drag & drop files here or click to select</p>
-                            <p class="file-types">supported: mp4, avi, mov, mkv, webm, mp3, wav, ogg, m4a</p>
+                    <div class="upload-header">
+                        <h2>add to queue</h2>
+                        <div class="upload-types">
+                            <button class="upload-type-btn active" id="files-tab" onclick="UploadModule.switchUploadType('files')">files</button>
+                            <button class="upload-type-btn" id="url-tab" onclick="UploadModule.switchUploadType('url')">url</button>
                         </div>
-                        <input type="file" id="file-input" multiple accept=".mp4,.avi,.mov,.mkv,.webm,.mp3,.wav,.ogg,.m4a">
                     </div>
+                    
+                    <!-- files upload -->
+                    <div class="upload-content" id="files-upload">
+                        <div class="upload-zone" id="upload-area">
+                            <div class="upload-icon">⬆</div>
+                            <div class="upload-text">
+                                <span class="upload-primary">drop files or click to browse</span>
+                                <span class="upload-secondary">mp4, avi, mov, mkv, webm, mp3, wav, ogg, m4a</span>
+                            </div>
+                            <input type="file" id="file-input" multiple accept=".mp4,.avi,.mov,.mkv,.webm,.mp3,.wav,.ogg,.m4a">
+                        </div>
+                    </div>
+                    
+                    <!-- url upload -->
+                    <div class="upload-content" id="url-upload" style="display: none;">
+                        <div class="url-input-container">
+                            <input type="url" id="url-input" placeholder="paste youtube or media url">
+                            <button id="add-url-btn" onclick="UploadModule.addUrl()">add</button>
+                        </div>
+                    </div>
+                    
+                    <!-- progress area -->
                     <div id="upload-progress" class="upload-progress" style="display: none;">
-                        <!-- upload progress items will be shown here -->
-                    </div>
-                </section>
-
-                <!-- url input section -->
-                <section class="url-section">
-                    <h2>add url</h2>
-                    <div class="url-input-group">
-                        <input type="url" id="url-input" placeholder="paste youtube or other supported url...">
-                        <button id="add-url-btn" onclick="UploadModule.addUrl()">add to queue</button>
-                    </div>
-                    <div id="url-progress" class="url-progress" style="display: none;">
-                        <!-- url processing progress will be shown here -->
+                        <!-- progress items will be shown here -->
                     </div>
                 </section>
 
