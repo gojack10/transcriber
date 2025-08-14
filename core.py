@@ -16,7 +16,8 @@ class TranscriptionOrchestrator:
     def __init__(self):
         self.model = None
         self.model_id = "base.en"
-        self.temp_dir = Path("/home/jack/llm/transcription/.temp")
+        from config import config
+        self.temp_dir = config.TEMP_DIR
         self.max_workers = 3
         self.model_pool = []
         self.pool_lock = threading.Lock()

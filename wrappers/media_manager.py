@@ -58,8 +58,12 @@ def sanitize_filename(title):
     sanitized = sanitized.strip()
     return sanitized
 
-def check_file_exists(yt_link, temp_dir="/home/jack/llm/transcription/.temp"):
+def check_file_exists(yt_link, temp_dir=None):
     """check if .ogg file already exists for this youtube video"""
+    if temp_dir is None:
+        from config import config
+        temp_dir = str(config.TEMP_DIR)
+    
     title = get_video_title(yt_link)
     if not title:
         return False, None
@@ -77,8 +81,12 @@ def check_file_exists(yt_link, temp_dir="/home/jack/llm/transcription/.temp"):
     
     return False, None
 
-def check_local_file_exists(mp4_path, temp_dir="/home/jack/llm/transcription/.temp"):
+def check_local_file_exists(mp4_path, temp_dir=None):
     """check if .ogg file already exists for this local .mp4 file"""
+    if temp_dir is None:
+        from config import config
+        temp_dir = str(config.TEMP_DIR)
+    
     if not mp4_path:
         return False, None
     
@@ -92,7 +100,8 @@ def check_local_file_exists(mp4_path, temp_dir="/home/jack/llm/transcription/.te
 
 def download_audio(yt_link, on_complete=None, existing_item=None):    
     
-    temp_dir = "/home/jack/llm/transcription/.temp"
+    from config import config
+    temp_dir = str(config.TEMP_DIR)
     
     if existing_item:
         item_id = existing_item.id
@@ -188,7 +197,8 @@ def convert_to_audio(file_path, file_name=None, on_complete=None):
         base = os.path.basename(file_path)
         file_name = os.path.splitext(base)[0]
 
-    output_path = f"/home/jack/llm/transcription/.temp/{file_name}.ogg"
+    from config import config
+    output_path = config.TEMP_DIR / f"{file_name}.ogg"
 
     file_exists, existing_file_path = check_local_file_exists(file_path)
     if file_exists:
@@ -238,8 +248,11 @@ def convert_to_audio(file_path, file_name=None, on_complete=None):
     return output.stdout + output.stderr
 
 # TEST FUNCTIONS - for automatic file discovery in .temp directory
-def TEST_get_all_media_files(temp_dir="/home/jack/llm/transcription/.temp"):
+def TEST_get_all_media_files(temp_dir=None):
     """get all .mp4 and .ogg files in temp directory for testing"""
+    if temp_dir is None:
+        from config import config
+        temp_dir = str(config.TEMP_DIR)
     temp_path = Path(temp_dir)
     if not temp_path.exists():
         return []

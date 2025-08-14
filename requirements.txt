@@ -7,3 +7,5 @@ nvidia-cudnn-cu12==9.*
 flask
 werkzeug
 pytz
+python-dotenv
+gunicorn

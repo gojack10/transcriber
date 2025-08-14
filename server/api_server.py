@@ -3,7 +3,6 @@ from flask.helpers import make_response
 import os
 import threading
 from pathlib import Path
-import tempfile
 from werkzeug.utils import secure_filename
 import sys
 
@@ -12,13 +11,15 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from wrappers.media_manager import conversion_queue, download_audio, convert_to_audio, get_video_title
 from wrappers.queue_manager import QueueStatus
 from wrappers.db.db_manager import TranscriptionDB
+from config import config
 
 app = Flask(__name__, static_folder='static', static_url_path='')
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024 
-app.config['UPLOAD_FOLDER'] = '/home/jack/llm/transcription/.temp'
+app.config['MAX_CONTENT_LENGTH'] = config.MAX_CONTENT_LENGTH
+app.config['UPLOAD_FOLDER'] = config.get_temp_dir_str()
+app.config['SECRET_KEY'] = config.SECRET_KEY
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-db = TranscriptionDB()
+db = TranscriptionDB(config.get_db_path())
 
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm', 'mp3', 'wav', 'ogg', 'm4a'}
 
@@ -458,7 +459,7 @@ def resolve_duplicate(item_id):
                     header = item.pending_transcription['header']
                     
                     from pathlib import Path
-                    temp_dir = Path('/home/jack/llm/transcription/.temp')
+                    temp_dir = config.TEMP_DIR
                     output_path = temp_dir / filename
                     with open(output_path, "w", encoding="utf-8") as f:
                         f.write(header)
@@ -476,8 +477,12 @@ def resolve_duplicate(item_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-def run_server(host='localhost', port=8080, debug=False):
+def run_server(host=None, port=None, debug=None):
     """start the flask server"""
+    host = host or config.HOST
+    port = port or config.PORT
+    debug = debug if debug is not None else config.DEBUG
+    
     print(f"starting transcription api server on http://{host}:{port}")
     app.run(host=host, port=port, debug=debug, threaded=True)
 

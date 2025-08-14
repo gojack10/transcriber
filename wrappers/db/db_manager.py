@@ -7,7 +7,10 @@ from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
 
 class TranscriptionDB:
-    def __init__(self, db_path: str = "/home/jack/llm/transcription/transcription.db"):
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+            from config import config
+            db_path = config.get_db_path()
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(exist_ok=True)
         self._lock = threading.Lock()

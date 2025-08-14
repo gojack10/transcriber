@@ -1,0 +1,13 @@
+tunnel: your-tunnel-id-here
+credentials-file: /home/your-username/.cloudflared/your-tunnel-id.json
+
+ingress:
+  # route your domain to localhost:8080
+  - hostname: transcription.10server.net
+    service: http://localhost:8080
+  # catch-all rule (required)
+  - service: http_status:404
+
+# optional: configure cloudflare tunnel to auto-start
+# add this to systemd or your init system
+

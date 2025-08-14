@@ -35,7 +35,7 @@ def main():
         time.sleep(1)
         
         print("starting http api server...")
-        run_server(host='localhost', port=8080, debug=False)
+        run_server(debug=False)
         
     except KeyboardInterrupt:
         print("\nshutting down server...")

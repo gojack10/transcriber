@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  transcription:
+    build: .
+    volumes:
+      - ./transcription.db:/app/transcription.db
+      - ./.temp:/app/.temp
+      - ./.stats:/app/.stats
+      - ./whisper-cache:/app/whisper-cache
+    environment:
+      - TRANSCRIPTION_HOST=0.0.0.0
+      - TRANSCRIPTION_PORT=8080
+      - TRANSCRIPTION_DEBUG=false
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY}
+      - TRANSCRIPTION_TEMP_DIR=/app/.temp
+      - TRANSCRIPTION_DB_PATH=/app/transcription.db
+      - TRANSCRIPTION_STATS_DIR=/app/.stats
+      - WHISPER_CACHE_DIR=/app/whisper-cache
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflare-tunnel.yml:/etc/cloudflared/config.yml:ro
+      - ~/.cloudflared:/etc/cloudflared/creds:ro
+    restart: unless-stopped
+    depends_on:
+      - transcription
