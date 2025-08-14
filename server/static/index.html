@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>transcription automation</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
     <div class="container">
@@ -16,8 +16,8 @@
         </header>
 
         <nav class="tabs">
-            <button class="tab-btn active" onclick="switchTab('queue')">queue management</button>
-            <button class="tab-btn" onclick="switchTab('transcriptions')">transcriptions</button>
+            <button class="tab-btn active" onclick="TabsModule.switchTab('queue')">queue management</button>
+            <button class="tab-btn" onclick="TabsModule.switchTab('transcriptions')">transcriptions</button>
         </nav>
 
         <main>
@@ -43,7 +43,7 @@
                     <h2>add url</h2>
                     <div class="url-input-group">
                         <input type="url" id="url-input" placeholder="paste youtube or other supported url...">
-                        <button id="add-url-btn" onclick="addUrl()">add to queue</button>
+                        <button id="add-url-btn" onclick="UploadModule.addUrl()">add to queue</button>
                     </div>
                     <div id="url-progress" class="url-progress" style="display: none;">
                         <!-- url processing progress will be shown here -->
@@ -57,23 +57,23 @@
                         <div class="queue-controls">
                             <div class="queue-sort-controls">
                                 <label>sort by:</label>
-                                <select id="queue-sort-by" onchange="refreshStatus()">
+                                <select id="queue-sort-by" onchange="QueueModule.refreshStatus()">
                                     <option value="updated_at">updated</option>
                                     <option value="created_at">created</option>
                                     <option value="status">status</option>
                                     <option value="file_path">name</option>
                                 </select>
-                                <select id="queue-sort-order" onchange="refreshStatus()">
+                                <select id="queue-sort-order" onchange="QueueModule.refreshStatus()">
                                     <option value="desc">descending</option>
                                     <option value="asc">ascending</option>
                                 </select>
                             </div>
                             <div class="queue-actions" id="queue-actions" style="display: none;">
-                                <button id="queue-select-all" onclick="toggleSelectAllQueue()">select all</button>
-                                <button id="queue-delete-selected" onclick="deleteSelectedQueueItems()" class="delete-btn">remove selected</button>
-                                <button id="queue-cancel-selection" onclick="cancelQueueSelection()">cancel</button>
+                                <button id="queue-select-all" onclick="QueueModule.toggleSelectAll()">select all</button>
+                                <button id="queue-delete-selected" onclick="QueueModule.deleteSelected()" class="delete-btn">remove selected</button>
+                                <button id="queue-cancel-selection" onclick="QueueModule.toggleManagement()">cancel</button>
                             </div>
-                            <button id="queue-manage-btn" onclick="toggleQueueManagement()">manage</button>
+                            <button id="queue-manage-btn" onclick="QueueModule.toggleManagement()">manage</button>
                         </div>
                     </div>
                     <div class="queue-stats" id="queue-stats">
@@ -96,21 +96,21 @@
                         <div class="transcriptions-controls">
                             <div class="sort-controls">
                                 <label>sort by:</label>
-                                <select id="sort-by" onchange="loadTranscriptions()">
+                                <select id="sort-by" onchange="TranscriptionsModule.loadTranscriptions()">
                                     <option value="id">id</option>
                                     <option value="filename">filename</option>
                                 </select>
-                                <select id="sort-order" onchange="loadTranscriptions()">
+                                <select id="sort-order" onchange="TranscriptionsModule.loadTranscriptions()">
                                     <option value="desc">descending</option>
                                     <option value="asc">ascending</option>
                                 </select>
                             </div>
                             <div class="transcriptions-actions" id="transcriptions-actions" style="display: none;">
-                                <button id="transcriptions-select-all" onclick="toggleSelectAllTranscriptions()">select all</button>
-                                <button id="transcriptions-delete-selected" onclick="deleteSelectedTranscriptions()" class="delete-btn">delete selected</button>
-                                <button id="transcriptions-cancel-selection" onclick="cancelTranscriptionsSelection()">cancel</button>
+                                <button id="transcriptions-select-all" onclick="TranscriptionsModule.toggleSelectAll()">select all</button>
+                                <button id="transcriptions-delete-selected" onclick="TranscriptionsModule.deleteSelected()" class="delete-btn">delete selected</button>
+                                <button id="transcriptions-cancel-selection" onclick="TranscriptionsModule.toggleManagement()">cancel</button>
                             </div>
-                            <button id="transcriptions-manage-btn" onclick="toggleTranscriptionsManagement()">manage</button>
+                            <button id="transcriptions-manage-btn" onclick="TranscriptionsModule.toggleManagement()">manage</button>
                         </div>
                     </div>
                     <div class="transcriptions-table" id="transcriptions-list">
@@ -127,8 +127,8 @@
             <div class="modal-header">
                 <h3 id="modal-title">transcription content</h3>
                 <div class="modal-header-actions">
-                    <button class="copy-btn" onclick="copyToClipboard()">copy to clipboard</button>
-                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                    <button class="copy-btn" onclick="ModalModule.copyToClipboard()">copy to clipboard</button>
+                    <button class="modal-close" onclick="ModalModule.closeTranscriptionModal()">&times;</button>
                 </div>
             </div>
             <div class="modal-body">
@@ -150,12 +150,12 @@
                 <div class="duplicate-filename" id="duplicate-filename"></div>
                 <div class="duplicate-actions">
                     <button id="duplicate-overwrite" class="warning-btn">overwrite existing</button>
-                    <button id="duplicate-cancel" onclick="closeDuplicateModal()">cancel upload</button>
+                    <button id="duplicate-cancel" onclick="ModalModule.closeDuplicateModal()">cancel upload</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <script type="module" src="js/core/app.js"></script>
 </body>
 </html>

@@ -1,0 +1,59 @@
+/* base styles, variables, and reset */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+    --bg0: #0f0f0f;
+    --bg1: #151515; 
+    --bg2: #1e1e1e;
+    --fg0: #ffffff;
+    --fg1: #d0d0d0;
+    --fg2: #8a8a8a;
+    --accent: #3a3a3a;
+    --focus: #6f6f6f;
+    --urgent: #ff5555;
+    --warning: #f39c12;
+    --success: #2ecc71;
+    --info: #3498db;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'JetBrains Mono', 'Monaco', 'Consolas', monospace !important;
+}
+
+html, body {
+    height: 100%;
+    overflow-x: hidden;
+}
+
+body {
+    font-family: 'JetBrains Mono', 'Monaco', 'Consolas', monospace;
+    background-color: var(--bg0);
+    color: var(--fg1);
+    line-height: 1.4;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+}
+
+/* scrollbar styling */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg1);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--accent);
+    border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--focus);
+}

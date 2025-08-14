@@ -1,0 +1,64 @@
+/* main css file importing all modular styles */
+
+/* core styles */
+@import url('./core/base.css');
+@import url('./core/layout.css');
+@import url('./core/components.css');
+
+/* module styles */
+@import url('./modules/tabs.css');
+@import url('./modules/upload.css');
+@import url('./modules/queue.css');
+@import url('./modules/transcriptions.css');
+@import url('./modules/modal.css');
+
+/* responsive design */
+@media (max-width: 768px) {
+    .container {
+        padding: 6px;
+    }
+    
+    .tabs {
+        flex-direction: column;
+    }
+    
+    .tab-btn {
+        border-right: none;
+        border-bottom: 1px solid var(--accent);
+    }
+    
+    .tab-btn:last-child {
+        border-bottom: none;
+    }
+    
+    .url-input-group {
+        flex-direction: column;
+    }
+    
+    .queue-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    
+    .item-actions {
+        align-self: flex-end;
+    }
+    
+    .transcriptions-header {
+        flex-direction: column;
+        gap: 10px;
+        align-items: flex-start;
+    }
+    
+    .modal-content {
+        width: 98%;
+        margin: 1% auto;
+        height: 95vh;
+    }
+    
+    .modal-body textarea {
+        font-size: 11px;
+        padding: 12px;
+    }
+}

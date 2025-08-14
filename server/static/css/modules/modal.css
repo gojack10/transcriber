@@ -1,0 +1,118 @@
+/* modal styles */
+
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.8);
+}
+
+.modal-content {
+    background-color: var(--bg2);
+    margin: 2% auto;
+    border: 2px solid var(--focus);
+    width: 95%;
+    max-width: 1200px;
+    height: 90vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.modal-header {
+    padding: 15px;
+    border-bottom: 1px solid var(--accent);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal-header h3 {
+    font-size: 14px;
+    color: var(--fg0);
+    text-transform: lowercase;
+    flex: 1;
+}
+
+.modal-header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.modal-close {
+    background: var(--urgent);
+    color: var(--fg0);
+    border: none;
+    width: 24px;
+    height: 24px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+}
+
+.modal-close:hover {
+    background: #c0392b;
+}
+
+.modal-body {
+    padding: 15px;
+    overflow: hidden;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.transcription-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.modal-body textarea {
+    background: var(--bg0);
+    border: 2px solid var(--accent);
+    color: var(--fg1);
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 16px;
+    resize: none;
+    outline: none;
+    flex: 1;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-y: auto;
+    min-height: 400px;
+}
+
+.modal-body textarea:focus {
+    border-color: var(--focus);
+}
+
+/* duplicate modal */
+.duplicate-modal-content {
+    width: 400px;
+    height: auto;
+    max-width: 90%;
+}
+
+.duplicate-filename {
+    background: var(--bg0);
+    border: 1px solid var(--accent);
+    padding: 8px;
+    margin: 12px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--fg1);
+    word-break: break-all;
+}
+
+.duplicate-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 15px;
+}
