@@ -85,9 +85,11 @@ def add_link_to_queue():
         
         video_title = get_video_title(url)
         
+        item_id = conversion_queue.add_item(url, url, video_title)
+        
         def download_task():
             try:
-                download_audio(url)
+                download_audio(url, existing_item=conversion_queue.get_item(item_id))
             except Exception as e:
                 print(f"download error for {url}: {e}")
         
