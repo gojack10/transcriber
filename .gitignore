@@ -16,3 +16,4 @@ plan.md
 todo.md
 *.db
 cloudflare-tunnel.yml
+cloudflared-credentials.json

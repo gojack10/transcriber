@@ -1,8 +1,8 @@
-version: '3.8'
-
 services:
   transcription:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     volumes:
       - ./transcription.db:/app/transcription.db
       - ./.temp:/app/.temp
@@ -17,16 +17,25 @@ services:
       - TRANSCRIPTION_DB_PATH=/app/transcription.db
       - TRANSCRIPTION_STATS_DIR=/app/.stats
       - WHISPER_CACHE_DIR=/app/whisper-cache
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
     ports:
       - "8080:8080"
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     
   cloudflared:
     image: cloudflare/cloudflared:latest
     command: tunnel --config /etc/cloudflared/config.yml run
     volumes:
       - ./cloudflare-tunnel.yml:/etc/cloudflared/config.yml:ro
-      - ~/.cloudflared:/etc/cloudflared/creds:ro
+      - ./cloudflared-credentials.json:/etc/cloudflared/cloudflared-credentials.json:ro
     restart: unless-stopped
     depends_on:
       - transcription
