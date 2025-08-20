@@ -45,7 +45,7 @@ export class TranscriptionsModule {
                 `<input type="checkbox" class="item-checkbox" onchange="TranscriptionsModule.toggleItemSelection(${item.id})" onclick="event.stopPropagation()" ${APP_STATE.selectedTranscriptions.has(item.id) ? 'checked' : ''}>` : '';
             
             return `
-                <div class="transcription-item" ${!APP_STATE.transcriptionsManagementMode ? `onclick="TranscriptionsModule.viewTranscription(${item.id}, '${item.filename}')" style="cursor: pointer;"` : ''}>
+                <div class="transcription-item" ${!APP_STATE.transcriptionsManagementMode ? `onclick="TranscriptionsModule.viewTranscription(${item.id}, '${item.filename.replace(/'/g, "\\'")}')" style="cursor: pointer;"` : ''}>
                     <div class="transcription-info">
                         <div class="transcription-id">${item.id}</div>
                         <div class="transcription-filename">${item.filename}</div>

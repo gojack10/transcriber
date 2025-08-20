@@ -28,7 +28,7 @@ class Config:
         self.SECRET_KEY = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-production')
         
         # whisper model configuration
-        self.WHISPER_MODEL = os.environ.get('WHISPER_MODEL', 'base.en')
+        self.WHISPER_MODEL = os.environ.get('WHISPER_MODEL', 'small.en')
         self.MAX_WORKERS = int(os.environ.get('TRANSCRIPTION_MAX_WORKERS', '3'))
         
         # create directories if they don't exist

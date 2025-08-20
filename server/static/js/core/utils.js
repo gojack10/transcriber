@@ -5,7 +5,41 @@ export function updateStatus(message) {
 
 export function getTimeAgo(date) {
     const now = new Date();
-    const diff = Math.floor((now - date) / 1000);
+    // ensure date is a valid Date object
+    let targetDate;
+    
+    if (date instanceof Date) {
+        targetDate = date;
+    } else if (typeof date === 'string') {
+        // handle ISO date strings with timezone info
+        targetDate = new Date(date);
+        
+        // if the date string doesn't include timezone info and looks like UTC, ensure it's treated as UTC
+        if (!date.includes('+') && !date.includes('Z') && date.includes('T')) {
+            // assume UTC if no timezone specified
+            targetDate = new Date(date + 'Z');
+        }
+    } else {
+        return 'invalid date';
+    }
+    
+    // check if date is valid
+    if (isNaN(targetDate.getTime())) {
+        console.error('Invalid date:', date);
+        return 'invalid date';
+    }
+    
+    const diff = Math.floor((now - targetDate) / 1000);
+    
+    // handle negative differences (future dates)
+    if (diff < 0) {
+        console.warn('Future date detected:', date, 'diff:', diff);
+        const absDiff = Math.abs(diff);
+        if (absDiff < 60) return `in ${absDiff}s`;
+        if (absDiff < 3600) return `in ${Math.floor(absDiff / 60)}m`;
+        if (absDiff < 86400) return `in ${Math.floor(absDiff / 3600)}h`;
+        return `in ${Math.floor(absDiff / 86400)}d`;
+    }
     
     if (diff < 60) return `${diff}s ago`;
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;

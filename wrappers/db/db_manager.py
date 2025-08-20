@@ -1,7 +1,7 @@
 import sqlite3
 import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
@@ -26,6 +26,19 @@ class TranscriptionDB:
             transcribed_time TEXT NOT NULL,
             queue_item_id TEXT,
             youtube_url TEXT
+        );""")
+            
+            conn.execute("""
+        CREATE TABLE IF NOT EXISTS queue_items (
+            id TEXT PRIMARY KEY,
+            file_path TEXT,
+            url TEXT,
+            video_title TEXT,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            error_message TEXT,
+            pending_transcription TEXT
         );""")
             conn.commit()
 
@@ -149,6 +162,85 @@ class TranscriptionDB:
         except Exception as e:
             print(f"error getting youtube url info: {e}")
             return None
+
+    # queue item management methods
+    def save_queue_item(self, queue_item) -> bool:
+        """save or update a queue item in the database"""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("""
+                INSERT OR REPLACE INTO queue_items 
+                (id, file_path, url, video_title, status, created_at, updated_at, error_message, pending_transcription)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    queue_item.id,
+                    str(queue_item.file_path) if queue_item.file_path else None,
+                    getattr(queue_item, 'url', None),
+                    getattr(queue_item, 'video_title', None),
+                    queue_item.status.value,
+                    queue_item.created_at.isoformat(),
+                    queue_item.updated_at.isoformat(),
+                    queue_item.error_message,
+                    str(getattr(queue_item, 'pending_transcription', None)) if getattr(queue_item, 'pending_transcription', None) else None
+                ))
+                conn.commit()
+                return True
+        except Exception as e:
+            print(f"error saving queue item {queue_item.id}: {e}")
+            return False
+
+    def load_queue_items(self) -> List[Dict[str, Any]]:
+        """load all queue items from database"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("""
+                SELECT id, file_path, url, video_title, status, created_at, updated_at, error_message, pending_transcription
+                FROM queue_items ORDER BY created_at
+                """)
+                items = []
+                for row in cursor.fetchall():
+                    items.append({
+                        'id': row[0],
+                        'file_path': row[1],
+                        'url': row[2],
+                        'video_title': row[3],
+                        'status': row[4],
+                        'created_at': row[5],
+                        'updated_at': row[6],
+                        'error_message': row[7],
+                        'pending_transcription': row[8]
+                    })
+                return items
+        except Exception as e:
+            print(f"error loading queue items: {e}")
+            return []
+
+    def delete_queue_item(self, item_id: str) -> bool:
+        """delete a queue item from database"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("DELETE FROM queue_items WHERE id = ?", (item_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            print(f"error deleting queue item {item_id}: {e}")
+            return False
+
+    def cleanup_completed_queue_items(self) -> int:
+        """remove completed/failed queue items older than 24 hours, returns count removed"""
+        try:
+            cutoff_time = (datetime.now() - timedelta(hours=24)).isoformat()
+            with self.get_connection() as conn:
+                cursor = conn.execute("""
+                DELETE FROM queue_items 
+                WHERE status IN ('completed', 'failed', 'cancelled') 
+                AND updated_at < ?
+                """, (cutoff_time,))
+                conn.commit()
+                return cursor.rowcount
+        except Exception as e:
+            print(f"error cleaning up queue items: {e}")
+            return 0
 
     @contextmanager
     def get_connection(self):

@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 from werkzeug.utils import secure_filename
 import sys
+import datetime
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -170,12 +171,12 @@ def get_queue_items():
         for item in items:
             items_data.append({
                 'id': item.id,
-                'file_path': item.file_path,
+                'file_path': str(item.file_path) if item.file_path else None,
                 'url': getattr(item, 'url', None),
                 'video_title': getattr(item, 'video_title', None),
                 'status': item.status.value,
-                'created_at': item.created_at.isoformat(),
-                'updated_at': item.updated_at.isoformat(),
+                'created_at': item.created_at.replace(tzinfo=datetime.timezone.utc).isoformat() if item.created_at else None,
+                'updated_at': item.updated_at.replace(tzinfo=datetime.timezone.utc).isoformat() if item.updated_at else None,
                 'error_message': item.error_message
             })
         
@@ -347,11 +348,11 @@ def get_pending_duplicates():
         for item in items:
             items_data.append({
                 'id': item.id,
-                'file_path': item.file_path,
+                'file_path': str(item.file_path) if item.file_path else None,
                 'url': getattr(item, 'url', None),
                 'status': item.status.value,
-                'created_at': item.created_at.isoformat(),
-                'updated_at': item.updated_at.isoformat(),
+                'created_at': item.created_at.replace(tzinfo=datetime.timezone.utc).isoformat() if item.created_at else None,
+                'updated_at': item.updated_at.replace(tzinfo=datetime.timezone.utc).isoformat() if item.updated_at else None,
                 'error_message': item.error_message,
                 'pending_filename': item.pending_transcription['filename'] if item.pending_transcription else None
             })

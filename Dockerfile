@@ -36,13 +36,13 @@ COPY requirements-docker.txt requirements.txt
 # install exact package versions in the venv (this recreates your venv exactly)
 RUN pip install --no-cache-dir -r requirements.txt
 
-# install yt-dlp normally, then update it using yt-dlp -U
-RUN pip install --no-cache-dir yt-dlp && yt-dlp -U
+# install latest yt-dlp
+RUN pip install --no-cache-dir --upgrade yt-dlp
 
 # copy application code
 COPY . .
 
-# create necessary directories
+# create necessary directories and initialize database
 RUN mkdir -p .temp .stats whisper-cache
 
 # expose port

@@ -39,6 +39,13 @@ class QueueItem:
         self.error_message = error_message
         self.updated_at = datetime.now()
         print(f"Updated status for item {self.id} to {new_status}")
+        
+        try:
+            from wrappers.media_manager import conversion_queue
+            if hasattr(conversion_queue, '_save_to_db'):
+                conversion_queue._save_to_db(self)
+        except:
+            pass  
 
     def mark_failed(self, error: str):
         self.update_status(QueueStatus.FAILED, error)
@@ -51,12 +58,127 @@ class QueueManager:
     def __init__(self):
         self.queue = {}
         self.processing_order = []
+        self.db = None
+        self._init_db()
+        self._load_from_db()
+    
+    def _init_db(self):
+        """initialize database connection"""
+        try:
+            from wrappers.db.db_manager import TranscriptionDB
+            self.db = TranscriptionDB()
+        except Exception as e:
+            print(f"warning: could not initialize database for queue persistence: {e}")
+    
+    def _load_from_db(self):
+        """load existing queue items from database on startup"""
+        if not self.db:
+            return
+        
+        try:
+            db_items = self.db.load_queue_items()
+            for item_data in db_items:
+                item = QueueItem(item_data['id'])
+                item.file_path = item_data['file_path']
+                item.url = item_data['url']
+                item.video_title = item_data['video_title']
+                item.status = QueueStatus(item_data['status'])
+                item.created_at = datetime.fromisoformat(item_data['created_at'])
+                item.updated_at = datetime.fromisoformat(item_data['updated_at'])
+                item.error_message = item_data['error_message']
+                
+                if item_data['pending_transcription'] and item_data['pending_transcription'] != 'None':
+                    try:
+                        import ast
+                        item.pending_transcription = ast.literal_eval(item_data['pending_transcription'])
+                    except:
+                        item.pending_transcription = None
+                
+                self.queue[item.id] = item
+                final_states = {QueueStatus.COMPLETED, QueueStatus.FAILED, QueueStatus.CANCELLED}
+                if item.status not in final_states:
+                    self.processing_order.append(item.id)
+            
+            print(f"loaded {len(db_items)} queue items from database")
+            
+            if self.db:
+                cleaned = self.db.cleanup_completed_queue_items()
+                if cleaned > 0:
+                    print(f"cleaned up {cleaned} old completed queue items")
+            
+            self._cleanup_orphaned_temp_files()
+                    
+        except Exception as e:
+            print(f"error loading queue items from database: {e}")
+    
+    def _cleanup_orphaned_temp_files(self):
+        """cleanup temp files that are completed but still exist"""
+        try:
+            from config import config
+            from pathlib import Path
+            import os
+            
+            temp_dir = Path(config.TEMP_DIR)
+            if not temp_dir.exists():
+                return
+            
+            ogg_files = list(temp_dir.glob("*.ogg"))
+            if not ogg_files:
+                return
+            
+            if not self.db:
+                return
+            
+            from wrappers.db.db_manager import TranscriptionDB
+            completed_filenames = set()
+            try:
+                all_transcriptions = self.db.get_all_transcriptions()
+                for t in all_transcriptions:
+                    completed_filenames.add(t['filename'])
+            except:
+                return
+            
+            cleaned_count = 0
+            for ogg_file in ogg_files:
+                file_stem = ogg_file.stem
+                
+                if file_stem in completed_filenames:
+                    is_active = False
+                    for item in self.queue.values():
+                        if (item.file_path and 
+                            Path(item.file_path).stem == file_stem and
+                            item.status not in {QueueStatus.COMPLETED, QueueStatus.FAILED, QueueStatus.CANCELLED}):
+                            is_active = True
+                            break
+                    
+                    if not is_active:
+                        try:
+                            os.remove(ogg_file)
+                            print(f"cleaned up orphaned temp file: {ogg_file.name}")
+                            cleaned_count += 1
+                        except Exception as e:
+                            print(f"error cleaning up {ogg_file}: {e}")
+            
+            if cleaned_count > 0:
+                print(f"cleaned up {cleaned_count} orphaned temp files")
+                
+        except Exception as e:
+            print(f"error during temp file cleanup: {e}")
+    
+    def _save_to_db(self, item):
+        """save queue item to database"""
+        if self.db:
+            try:
+                self.db.save_queue_item(item)
+            except Exception as e:
+                print(f"error saving queue item to database: {e}")
     
     def add_item(self, file_path: str, url: Optional[str] = None, video_title: Optional[str] = None) -> str:
         item_id = str(uuid.uuid4())
         item = QueueItem(item_id, file_path, url, video_title)
         self.queue[item_id] = item
         self.processing_order.append(item_id)
+        self._save_to_db(item)
         print(f"Added item {item_id} for {file_path}")
         return item_id
     
@@ -64,6 +186,7 @@ class QueueManager:
         if item_id in self.queue:
             self.queue[item_id].file_path = new_file_path
             self.queue[item_id].updated_at = datetime.now()
+            self._save_to_db(self.queue[item_id])
             print(f"Updated file path for item {item_id} to {new_file_path}")
         else:
             print(f"Item {item_id} not found in queue")
@@ -104,6 +227,9 @@ class QueueManager:
                 cleanup_item_files(item)
             except ImportError:
                 pass
+            
+            if self.db:
+                self.db.delete_queue_item(item_id)
             
             del self.queue[item_id]
             if item_id in self.processing_order:

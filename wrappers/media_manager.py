@@ -135,11 +135,17 @@ def download_audio(yt_link, on_complete=None, existing_item=None):
         "--audio-format", "opus",
         "--audio-quality", "0",
         "-P", temp_dir,
-        yt_link 
+        "--format", "bestaudio/best",
+        "--no-check-certificate",
+        "--extractor-args", "youtube:player_client=android",
+        "--verbose",
+        yt_link
     ], capture_output=True, text=True)
     
     if download_output.returncode != 0:
-        conversion_queue.get_item(item_id).mark_failed(download_output.stdout + download_output.stderr)
+        item = conversion_queue.get_item(item_id)
+        if item:
+            item.mark_failed(download_output.stdout + download_output.stderr)
         if on_complete:
             on_complete(False, download_output.stdout + download_output.stderr, None)
         return download_output.stdout + download_output.stderr
@@ -147,7 +153,9 @@ def download_audio(yt_link, on_complete=None, existing_item=None):
     opus_files = glob.glob(f"{temp_dir}/*.opus")
     if not opus_files:
         error_msg = "no opus file found after download"
-        conversion_queue.get_item(item_id).mark_failed(error_msg)
+        item = conversion_queue.get_item(item_id)
+        if item:
+            item.mark_failed(error_msg)
         if on_complete:
             on_complete(False, error_msg, None)
         return error_msg
@@ -235,12 +243,19 @@ def convert_to_audio(file_path, file_name=None, on_complete=None):
 
     if output.returncode == 0:
         conversion_queue.update_item_path(item_id, output_path)
-        conversion_queue.get_item(item_id).update_status(QueueStatus.CONVERTED)
-        print(f"Converted {file_path} to {output_path}. \n\nQueueManager: {conversion_queue.get_all_items()}")
-        
-        check_duplicate_before_conversion(item_id)
+        item = conversion_queue.get_item(item_id)
+        if item:
+            item.update_status(QueueStatus.CONVERTED)
+            print(f"Converted {file_path} to {output_path}. \n\nQueueManager: {conversion_queue.get_all_items()}")
+            check_duplicate_before_conversion(item_id)
+        else:
+            print(f"Item {item_id} was removed from queue during conversion")
     else:
-        conversion_queue.get_item(item_id).mark_failed(output.stdout + output.stderr)
+        item = conversion_queue.get_item(item_id)
+        if item:
+            item.mark_failed(output.stdout + output.stderr)
+        else:
+            print(f"Item {item_id} was removed from queue during conversion (failed)")
     
     if on_complete:
         on_complete(output.returncode == 0, output.stdout + output.stderr, output_path)

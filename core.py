@@ -15,9 +15,10 @@ from wrappers.db.db_manager import TranscriptionDB
 class TranscriptionOrchestrator:
     def __init__(self):
         self.model = None
-        self.model_id = "base.en"
         from config import config
+        self.model_id = config.WHISPER_MODEL
         self.temp_dir = config.TEMP_DIR
+        self.whisper_cache_dir = config.WHISPER_CACHE_DIR
         self.max_workers = 3
         self.model_pool = []
         self.pool_lock = threading.Lock()
@@ -31,7 +32,7 @@ class TranscriptionOrchestrator:
             print("warning: torch reports no cuda device, still forcing cuda for debugging")
         device = "cuda"
         compute_type = "float16"
-        model = WhisperModel(self.model_id, device=device, compute_type=compute_type)
+        model = WhisperModel(self.model_id, device=device, compute_type=compute_type, download_root=str(self.whisper_cache_dir))
         print(f"faster-whisper model loaded: {self.model_id} on {device} ({compute_type})")
         return model
     
