@@ -59,12 +59,24 @@ export class TranscriptionsModule {
 
     static async viewTranscription(id, filename) {
         try {
-            const data = await ApiService.get(`${CONFIG.API_ENDPOINTS.TRANSCRIPTIONS}/${id}`);
+            // check cache first
+            const cacheKey = `transcription_${id}`;
+            let content = APP_STATE.transcriptionCache.get(cacheKey);
             
-            if (data.content) {
-                // use modal module to show transcription
-                const { ModalModule } = await import('./modal.js');
-                ModalModule.showTranscription(filename, data.content);
+            if (!content) {
+                // not in cache, fetch from server
+                const data = await ApiService.get(`${CONFIG.API_ENDPOINTS.TRANSCRIPTIONS}/${id}`);
+                content = data.content;
+                
+                // cache the content for future use
+                if (content) {
+                    APP_STATE.transcriptionCache.set(cacheKey, content);
+                }
+            }
+            
+            if (content) {
+                // use preloaded modal module to show transcription
+                window.ModalModule.showTranscription(filename, content);
             }
             
         } catch (error) {
@@ -79,6 +91,7 @@ export class TranscriptionsModule {
         
         const manageBtn = document.getElementById('transcriptions-manage-btn');
         const actionsDiv = document.getElementById('transcriptions-actions');
+        const selectAllBtn = document.getElementById('transcriptions-select-all');
         
         if (APP_STATE.transcriptionsManagementMode) {
             manageBtn.textContent = 'done';
@@ -86,6 +99,8 @@ export class TranscriptionsModule {
         } else {
             manageBtn.textContent = 'manage';
             actionsDiv.style.display = 'none';
+            // reset select all button when exiting management mode
+            selectAllBtn.textContent = 'select all';
         }
         
         this.loadTranscriptions();

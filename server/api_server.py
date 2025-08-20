@@ -6,6 +6,7 @@ from pathlib import Path
 from werkzeug.utils import secure_filename
 import sys
 import datetime
+import pytz
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -24,6 +25,20 @@ db = TranscriptionDB(config.get_db_path())
 
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm', 'mp3', 'wav', 'ogg', 'm4a'}
 
+def local_to_utc_isoformat(dt):
+    """convert naive local datetime to utc iso format"""
+    if dt is None:
+        return None
+    # assume dt is in local timezone, convert to utc
+    local_tz = pytz.timezone('America/Los_Angeles')  # your timezone
+    if dt.tzinfo is None:
+        # make timezone-aware in local timezone
+        dt_local = local_tz.localize(dt)
+    else:
+        dt_local = dt
+    # convert to utc and return iso format
+    return dt_local.astimezone(pytz.UTC).isoformat()
+
 def allowed_file(filename):
     """check if file has allowed extension"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -34,6 +49,13 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    
+    # force cache refresh for static files (js/css) 
+    if request.path.endswith('.js') or request.path.endswith('.css'):
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    
     return response
 
 @app.route('/')
@@ -175,8 +197,8 @@ def get_queue_items():
                 'url': getattr(item, 'url', None),
                 'video_title': getattr(item, 'video_title', None),
                 'status': item.status.value,
-                'created_at': item.created_at.replace(tzinfo=datetime.timezone.utc).isoformat() if item.created_at else None,
-                'updated_at': item.updated_at.replace(tzinfo=datetime.timezone.utc).isoformat() if item.updated_at else None,
+                'created_at': local_to_utc_isoformat(item.created_at),
+                'updated_at': local_to_utc_isoformat(item.updated_at),
                 'error_message': item.error_message
             })
         
@@ -351,8 +373,8 @@ def get_pending_duplicates():
                 'file_path': str(item.file_path) if item.file_path else None,
                 'url': getattr(item, 'url', None),
                 'status': item.status.value,
-                'created_at': item.created_at.replace(tzinfo=datetime.timezone.utc).isoformat() if item.created_at else None,
-                'updated_at': item.updated_at.replace(tzinfo=datetime.timezone.utc).isoformat() if item.updated_at else None,
+                'created_at': local_to_utc_isoformat(item.created_at),
+                'updated_at': local_to_utc_isoformat(item.updated_at),
                 'error_message': item.error_message,
                 'pending_filename': item.pending_transcription['filename'] if item.pending_transcription else None
             })
@@ -474,6 +496,50 @@ def resolve_duplicate(item_id):
                     'success': True,
                     'message': f'overwrite completed for {filename}'
                 })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/system/gpu-cleanup', methods=['POST'])
+def force_gpu_cleanup():
+    """manually trigger gpu memory cleanup"""
+    try:
+        import torch
+        import gc
+        
+        # get memory info before cleanup
+        memory_before = None
+        if torch.cuda.is_available():
+            memory_before = {
+                'allocated': torch.cuda.memory_allocated() / 1024**3,
+                'cached': torch.cuda.memory_reserved() / 1024**3
+            }
+        
+        # perform aggressive cleanup
+        gc.collect()
+        gc.collect()
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+            torch.cuda.empty_cache()
+        
+        # get memory info after cleanup
+        memory_after = None
+        if torch.cuda.is_available():
+            memory_after = {
+                'allocated': torch.cuda.memory_allocated() / 1024**3,
+                'cached': torch.cuda.memory_reserved() / 1024**3
+            }
+        
+        print("manual gpu cleanup completed")
+        
+        return jsonify({
+            'success': True,
+            'message': 'gpu memory cleanup completed',
+            'memory_before': memory_before,
+            'memory_after': memory_after
+        })
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500

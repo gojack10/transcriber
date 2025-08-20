@@ -6,6 +6,9 @@ import { TranscriptionsModule } from '../modules/transcriptions.js';
 import { ModalModule } from '../modules/modal.js';
 import { TabsModule } from '../modules/tabs.js';
 
+// make modal module globally available to eliminate dynamic imports
+window.ModalModule = ModalModule;
+
 class App {
     static async init() {
         // initialize all modules
@@ -42,7 +45,30 @@ class App {
     }
     
     static startAutoRefresh() {
-        APP_STATE.statusInterval = setInterval(async () => {
+        this.scheduleNextRefresh();
+        
+        // pause polling when tab becomes hidden
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                if (APP_STATE.statusInterval) {
+                    clearTimeout(APP_STATE.statusInterval);
+                    APP_STATE.statusInterval = null;
+                }
+            } else {
+                // resume polling when tab becomes visible
+                if (!APP_STATE.statusInterval) {
+                    this.scheduleNextRefresh();
+                }
+            }
+        });
+    }
+    
+    static scheduleNextRefresh() {
+        if (APP_STATE.statusInterval) {
+            clearTimeout(APP_STATE.statusInterval);
+        }
+        
+        APP_STATE.statusInterval = setTimeout(async () => {
             if (APP_STATE.currentTab === 'queue') {
                 // check if queue status changed in a way that might affect transcriptions
                 const previousCompletedCount = APP_STATE.lastCompletedCount || 0;
@@ -66,12 +92,15 @@ class App {
             } else if (APP_STATE.currentTab === 'transcriptions') {
                 TranscriptionsModule.loadTranscriptions();
             }
-        }, CONFIG.REFRESH_INTERVAL);
+            
+            // schedule next refresh with current interval
+            this.scheduleNextRefresh();
+        }, APP_STATE.currentInterval);
     }
     
     static cleanup = () => {
         if (APP_STATE.statusInterval) {
-            clearInterval(APP_STATE.statusInterval);
+            clearTimeout(APP_STATE.statusInterval);
         }
     }
 }

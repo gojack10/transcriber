@@ -112,7 +112,7 @@ class QueueManager:
             print(f"error loading queue items from database: {e}")
     
     def _cleanup_orphaned_temp_files(self):
-        """cleanup temp files that are completed but still exist"""
+        """cleanup all files in .temp directory"""
         try:
             from config import config
             from pathlib import Path
@@ -122,48 +122,31 @@ class QueueManager:
             if not temp_dir.exists():
                 return
             
-            ogg_files = list(temp_dir.glob("*.ogg"))
-            if not ogg_files:
-                return
+            # get all files in temp directory
+            temp_files = [f for f in temp_dir.iterdir() if f.is_file()]
             
-            if not self.db:
-                return
-            
-            from wrappers.db.db_manager import TranscriptionDB
-            completed_filenames = set()
-            try:
-                all_transcriptions = self.db.get_all_transcriptions()
-                for t in all_transcriptions:
-                    completed_filenames.add(t['filename'])
-            except:
+            if not temp_files:
                 return
             
             cleaned_count = 0
-            for ogg_file in ogg_files:
-                file_stem = ogg_file.stem
-                
-                if file_stem in completed_filenames:
-                    is_active = False
-                    for item in self.queue.values():
-                        if (item.file_path and 
-                            Path(item.file_path).stem == file_stem and
-                            item.status not in {QueueStatus.COMPLETED, QueueStatus.FAILED, QueueStatus.CANCELLED}):
-                            is_active = True
-                            break
-                    
-                    if not is_active:
-                        try:
-                            os.remove(ogg_file)
-                            print(f"cleaned up orphaned temp file: {ogg_file.name}")
-                            cleaned_count += 1
-                        except Exception as e:
-                            print(f"error cleaning up {ogg_file}: {e}")
+            for temp_file in temp_files:
+                try:
+                    os.remove(temp_file)
+                    print(f"cleaned up temp file: {temp_file.name}")
+                    cleaned_count += 1
+                except Exception as e:
+                    print(f"error cleaning up {temp_file}: {e}")
             
             if cleaned_count > 0:
-                print(f"cleaned up {cleaned_count} orphaned temp files")
+                print(f"cleaned up {cleaned_count} temp files")
                 
         except Exception as e:
             print(f"error during temp file cleanup: {e}")
+    
+    def cleanup_temp_files(self):
+        """manually trigger temp file cleanup"""
+        print("manually cleaning up temp files...")
+        self._cleanup_orphaned_temp_files()
     
     def _save_to_db(self, item):
         """save queue item to database"""

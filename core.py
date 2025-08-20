@@ -127,15 +127,43 @@ class TranscriptionOrchestrator:
             time.sleep(0.5)
 
     def cleanup(self):
-        """cleanup models from memory"""
+        """cleanup models from memory with aggressive memory clearing"""
+        print("starting model cleanup...")
+        
         with self.pool_lock:
+            # explicitly delete model references
             for entry in self.model_pool:
-                del entry["model"]
+                if "model" in entry:
+                    model = entry["model"]
+                    # try to access model's internal cleanup if available
+                    if hasattr(model, 'model') and hasattr(model.model, 'cpu'):
+                        try:
+                            model.model.cpu()
+                        except:
+                            pass
+                    del model
+                    del entry["model"]
             self.model_pool = []
+        
+        # aggressive garbage collection
         gc.collect()
+        gc.collect()  # call twice for stubborn references
+        
         if torch.cuda.is_available():
+            # multiple cache clearing attempts
             torch.cuda.empty_cache()
-        print("model unloaded from memory")
+            torch.cuda.ipc_collect()  # clean up any ipc memory
+            torch.cuda.empty_cache()  # call again after ipc cleanup
+            
+            # get memory info for logging
+            try:
+                memory_allocated = torch.cuda.memory_allocated() / 1024**3  # convert to gb
+                memory_cached = torch.cuda.memory_reserved() / 1024**3
+                print(f"post-cleanup gpu memory - allocated: {memory_allocated:.2f}gb, cached: {memory_cached:.2f}gb")
+            except:
+                pass
+        
+        print("model cleanup completed - note: some memory may remain cached by cuda driver")
 
 def trigger_media_processing():
     """trigger conversion of all media files found in .temp directory"""

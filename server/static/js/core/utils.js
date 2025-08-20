@@ -4,36 +4,29 @@ export function updateStatus(message) {
 }
 
 export function getTimeAgo(date) {
+    // get current time in browser's timezone
     const now = new Date();
-    // ensure date is a valid Date object
     let targetDate;
     
     if (date instanceof Date) {
         targetDate = date;
     } else if (typeof date === 'string') {
-        // handle ISO date strings with timezone info
+        // server sends UTC timestamps - parse and convert to browser's local timezone
         targetDate = new Date(date);
-        
-        // if the date string doesn't include timezone info and looks like UTC, ensure it's treated as UTC
-        if (!date.includes('+') && !date.includes('Z') && date.includes('T')) {
-            // assume UTC if no timezone specified
-            targetDate = new Date(date + 'Z');
-        }
     } else {
         return 'invalid date';
     }
     
     // check if date is valid
     if (isNaN(targetDate.getTime())) {
-        console.error('Invalid date:', date);
         return 'invalid date';
     }
     
+    // both dates are now in browser's local timezone for comparison
     const diff = Math.floor((now - targetDate) / 1000);
     
-    // handle negative differences (future dates)
-    if (diff < 0) {
-        console.warn('Future date detected:', date, 'diff:', diff);
+    // handle future dates (allow small clock differences)
+    if (diff < -30) {
         const absDiff = Math.abs(diff);
         if (absDiff < 60) return `in ${absDiff}s`;
         if (absDiff < 3600) return `in ${Math.floor(absDiff / 60)}m`;
@@ -41,7 +34,10 @@ export function getTimeAgo(date) {
         return `in ${Math.floor(absDiff / 86400)}d`;
     }
     
-    if (diff < 60) return `${diff}s ago`;
+    // handle small negative differences as "just now"
+    if (diff < 0) return 'just now';
+    
+    if (diff < 60) return diff === 0 ? 'just now' : `${diff}s ago`;
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
     return `${Math.floor(diff / 86400)}d ago`;

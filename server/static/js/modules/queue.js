@@ -10,25 +10,38 @@ export class QueueModule {
         document.getElementById('queue-sort-order').addEventListener('change', () => this.refreshStatus());
     }
 
-    static async refreshStatus() {
-        try {
-            const [statusData, itemsData] = await Promise.all([
-                ApiService.get(CONFIG.API_ENDPOINTS.QUEUE_STATUS),
-                ApiService.get(CONFIG.API_ENDPOINTS.QUEUE_ITEMS)
-            ]);
-            
-            const sortBy = document.getElementById('queue-sort-by')?.value || 'updated_at';
-            const sortOrder = document.getElementById('queue-sort-order')?.value || 'desc';
-            const sortedItems = this.sortQueueItems(itemsData.items, sortBy, sortOrder);
-            
-            this.updateQueueStats(statusData);
-            this.updateQueueItems(sortedItems);
-            
-            updateStatus(`queue: ${statusData.total_items} items`);
-            
-        } catch (error) {
-            updateStatus(`error refreshing: ${error.message}`);
+    static async refreshStatus(force = false) {
+        // debounce queue refreshes to avoid rapid API calls (unless forced)
+        if (APP_STATE.queueRefreshTimeout && !force) {
+            clearTimeout(APP_STATE.queueRefreshTimeout);
         }
+        
+        const delay = force ? 0 : 100; // immediate refresh when forced
+        APP_STATE.queueRefreshTimeout = setTimeout(async () => {
+            try {
+                const [statusData, itemsData] = await Promise.all([
+                    ApiService.get(CONFIG.API_ENDPOINTS.QUEUE_STATUS),
+                    ApiService.get(CONFIG.API_ENDPOINTS.QUEUE_ITEMS)
+                ]);
+                
+                const sortBy = document.getElementById('queue-sort-by')?.value || 'updated_at';
+                const sortOrder = document.getElementById('queue-sort-order')?.value || 'desc';
+                const sortedItems = this.sortQueueItems(itemsData.items, sortBy, sortOrder);
+                
+                this.updateQueueStats(statusData);
+                this.updateQueueItems(sortedItems);
+                
+                // update activity state for adaptive polling
+                this.updateActivityState(statusData);
+                
+                updateStatus(`queue: ${statusData.total_items} items`);
+                
+            } catch (error) {
+                updateStatus(`error refreshing: ${error.message}`);
+            } finally {
+                APP_STATE.queueRefreshTimeout = null;
+            }
+        }, delay); // debounce delay (0 if forced)
     }
 
     static sortQueueItems(items, sortBy, sortOrder) {
@@ -68,6 +81,41 @@ export class QueueModule {
             
             return sortOrder === 'desc' ? -comparison : comparison;
         });
+    }
+
+    static updateActivityState(statusData) {
+        // detect if queue has active processing items
+        const activeCount = (statusData.status_counts.downloading || 0) + 
+                           (statusData.status_counts.converting || 0) + 
+                           (statusData.status_counts.transcribing || 0) +
+                           (statusData.status_counts.queued || 0);
+        
+        APP_STATE.hasActiveItems = activeCount > 0;
+        
+        // adjust polling interval based on activity
+        if (activeCount > 0) {
+            APP_STATE.currentInterval = CONFIG.REFRESH_INTERVAL; // 2s when active
+        } else if (statusData.total_items > 0) {
+            APP_STATE.currentInterval = CONFIG.REFRESH_INTERVAL_IDLE; // 10s when idle but has items
+        } else {
+            APP_STATE.currentInterval = CONFIG.REFRESH_INTERVAL_INACTIVE; // 30s when empty
+        }
+        
+        // force faster refresh if we just detected a major status change
+        const completedCount = statusData.status_counts.completed || 0;
+        if (completedCount !== APP_STATE.lastCompletedCount) {
+            APP_STATE.currentInterval = Math.min(APP_STATE.currentInterval, CONFIG.REFRESH_INTERVAL);
+        }
+    }
+
+    static async refreshStats() {
+        try {
+            const data = await ApiService.get(CONFIG.API_ENDPOINTS.QUEUE_STATUS);
+            this.updateQueueStats(data);
+        } catch (error) {
+            console.error('error refreshing queue stats:', error);
+            updateStatus(`error refreshing stats: ${error.message}`);
+        }
     }
 
     static updateQueueStats(statusData) {
@@ -127,7 +175,7 @@ export class QueueModule {
                 `<input type="checkbox" class="item-checkbox" onchange="QueueModule.toggleItemSelection('${item.id}')" ${APP_STATE.selectedQueueItems.has(item.id) ? 'checked' : ''}>` : '';
             
             return `
-                <div class="queue-item">
+                <div class="queue-item" data-item-id="${item.id}">
                     <div class="item-info">
                         <div class="item-name">${displayName}</div>
                         <div class="item-details">
@@ -148,17 +196,42 @@ export class QueueModule {
 
     static async removeItem(itemId) {
         try {
+            // optimistically remove item from DOM first for instant feedback
+            const queueItem = document.querySelector(`.queue-item[data-item-id="${itemId}"]`);
+            if (queueItem) {
+                queueItem.style.opacity = '0.5';
+                queueItem.style.pointerEvents = 'none';
+            }
+            
             const result = await ApiService.delete(`/api/queue/item/${itemId}`);
             
             if (result.success) {
                 const action = result.action || 'updated';
                 updateStatus(`item ${action} successfully`);
-                this.refreshStatus();
+                
+                // remove item from DOM instead of full refresh
+                if (queueItem) {
+                    queueItem.remove();
+                }
+                
+                // only update stats, not the whole queue
+                this.refreshStats();
             } else {
                 updateStatus(`failed: ${result.error}`);
+                // restore item appearance on failure
+                if (queueItem) {
+                    queueItem.style.opacity = '1';
+                    queueItem.style.pointerEvents = 'auto';
+                }
             }
         } catch (error) {
             updateStatus(`error: ${error.message}`);
+            // restore item appearance on error
+            const queueItem = document.querySelector(`.queue-item[data-item-id="${itemId}"]`);
+            if (queueItem) {
+                queueItem.style.opacity = '1';
+                queueItem.style.pointerEvents = 'auto';
+            }
         }
     }
 
@@ -205,6 +278,7 @@ export class QueueModule {
         
         const manageBtn = document.getElementById('queue-manage-btn');
         const actionsDiv = document.getElementById('queue-actions');
+        const selectAllBtn = document.getElementById('queue-select-all');
         
         if (APP_STATE.queueManagementMode) {
             manageBtn.textContent = 'done';
@@ -212,6 +286,8 @@ export class QueueModule {
         } else {
             manageBtn.textContent = 'manage';
             actionsDiv.style.display = 'none';
+            // reset select all button when exiting management mode
+            selectAllBtn.textContent = 'select all';
         }
         
         this.refreshStatus();
